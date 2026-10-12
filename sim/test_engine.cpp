@@ -3,7 +3,9 @@
 #include <cstdio>
 #include <vector>
 
+#include "engine.h"
 #include "hilbert.h"
+#include "softclip.h"
 #include "shifter.h"
 #include <algorithm>
 #include <cstdint>
@@ -111,11 +113,82 @@ static void TestFeedbackStable() {
     CHECK(peak < 4.f, "feedback 0.95: peak %.2f", peak);
 }
 
+// Runs the engine on a 1 kHz sine in both inputs; returns the last 0.5 s of OUT L
+static std::vector<float> RunEngine(const bitch::Params &p, float amplitude, std::vector<float> *right = nullptr) {
+    bitch::Engine e;
+    e.Init(kSampleRate);
+    const size_t block = 48;
+    std::vector<float> in(block), out_l(block), out_r(block), result;
+    int blocks = (int)kSampleRate / block;
+    for (int b = 0; b < blocks; b++) {
+        for (size_t k = 0; k < block; k++)
+            in[k] = amplitude * sinf(2 * kPi * 1000.f * (b * block + k) / kSampleRate);
+        e.Process(in.data(), in.data(), out_l.data(), out_r.data(), block, p);
+        if (b >= blocks / 2) {
+            result.insert(result.end(), out_l.begin(), out_l.end());
+            if (right) right->insert(right->end(), out_r.begin(), out_r.end());
+        }
+    }
+    return result;
+}
+
+static void TestEngineShiftAndMix() {
+    bitch::Params p;
+    p.tune_hz = 100.f;
+    p.mix = 1.f;
+    std::vector<float> right;
+    auto wet = RunEngine(p, 0.25f, &right);
+    CHECK(Magnitude(wet, 1100.f) > 0.2, "engine wet: 1100 Hz level %.3f", Magnitude(wet, 1100.f));
+    CHECK(Magnitude(wet, 1000.f) < 0.01, "engine wet: dry leaking %.3f", Magnitude(wet, 1000.f));
+    CHECK(fabs(Magnitude(right, 1100.f) - Magnitude(wet, 1100.f)) < 0.01, "engine: L/R differ");
+    p.mix = 0.f;
+    auto dry = RunEngine(p, 0.25f);
+    CHECK(Magnitude(dry, 1000.f) > 0.2, "engine dry: 1000 Hz level %.3f", Magnitude(dry, 1000.f));
+    CHECK(Magnitude(dry, 1100.f) < 0.01, "engine dry: wet leaking %.3f", Magnitude(dry, 1100.f));
+}
+
+static void TestEngineLimiter() {
+    bitch::Params p;
+    p.tune_hz = 50.f;
+    p.feedback = 0.95f;
+    p.mix = 1.f;
+    auto loud = RunEngine(p, 4.f); // far too hot input
+    float peak = 0.f;
+    for (float v : loud) peak = std::max(peak, fabsf(v));
+    CHECK(peak <= 1.f, "engine limiter: peak %.2f", peak);
+}
+
+static void TestEngineRecoversFromNaN() {
+    bitch::Engine e;
+    e.Init(kSampleRate);
+    bitch::Params p;
+    p.tune_hz = 100.f;
+    float in[48], out_l[48], out_r[48];
+    for (float &v : in) v = NAN;
+    e.Process(in, in, out_l, out_r, 48, p);
+    for (float v : out_l) CHECK(std::isfinite(v), "engine NaN: output not finite");
+    for (int k = 0; k < 48; k++) in[k] = 0.25f * sinf(2 * kPi * 1000.f * k / kSampleRate);
+    e.Process(in, in, out_l, out_r, 48, p);
+    for (float v : out_l) CHECK(std::isfinite(v), "engine NaN: did not recover");
+}
+
+static void TestSoftClip() {
+    bool bounded = true;
+    for (float x = -4.f; x <= 4.f; x += 0.0001f) bounded = bounded && fabsf(bitch::SoftClip(x)) <= 1.f;
+    CHECK(bounded, "softclip: output exceeds 1");
+    CHECK(fabsf(bitch::SoftClip(0.1f) - 0.1f) < 0.001f, "softclip: slope near 0");
+    CHECK(std::isnan(bitch::SoftClip(NAN)), "softclip: NaN must pass through");
+}
+
 int main() {
+    TestSoftClip();
     TestHilbertQuadrature();
     TestShiftUpAndDown();
     TestThroughZero();
     TestFeedbackStable();
+    TestEngineShiftAndMix();
+    TestEngineLimiter();
+    TestEngineRecoversFromNaN();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }
