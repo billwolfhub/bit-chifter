@@ -922,6 +922,9 @@ int main(void) {
     for (int i = 0; i < 8; i++) controls[i].Init(hw.adc.GetPtr(i), hw.AudioCallbackRate());
     hw.adc.Start();
 
+    // Flush denormals to zero: the feedback loop can otherwise settle into a tiny
+    // subnormal limit cycle after silence
+    __set_FPSCR(__get_FPSCR() | (1u << 24));
     engine.Init(hw.AudioSampleRate());
     cpu.Init(hw.AudioSampleRate(), hw.AudioBlockSize());
     hw.StartAudio(AudioCallback);

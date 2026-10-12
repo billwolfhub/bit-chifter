@@ -88,7 +88,8 @@ shift drift and fading wander independently (shared controls, different random p
      rejection from ~40 Hz to ~18 kHz).
    - Quadrature oscillator at the shift frequency (sin/cos from one phase accumulator);
      negative shift runs it backwards, so TUNE sweeps through 0.
-   - Single-sideband output `I·cos − Q·sin`.
+   - Single-sideband output `I·cos + Q·sin`, where I is the Niemitalo A chain (0.6923878…)
+     delayed one sample and Q is the B chain (sign verified by the shift tests).
    - **Feedback:** output → 2 ms delay → `tanh` soft clip → × knob 5 → added to the
      shifter input. The delay keeps the loop stable and gives the barberpole its smear.
    - Shift = (TUNE, or the recalled station's shift) + keyboard offset + drift, glided.
