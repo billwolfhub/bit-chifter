@@ -19,10 +19,12 @@ void Engine::Reset() {
 
 void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *out_r, size_t size,
                      const Params &params) {
+    if (size == 0) return;
+    float tune = fminf(fmaxf(params.tune_hz, -2500.f), 2500.f);
     float feedback = fminf(fmaxf(params.feedback, 0.f), 0.95f);
     float mix = fminf(fmaxf(params.mix, 0.f), 1.f);
     for (size_t i = 0; i < size; i++) {
-        shift_hz_ += glide_ * (params.tune_hz - shift_hz_);
+        shift_hz_ += glide_ * (tune - shift_hz_);
         float dry = 0.5f * (in_l[i] + in_r[i]);
         float wet_l = shifter_[0].Process(dry, shift_hz_, feedback);
         float wet_r = shifter_[1].Process(dry, shift_hz_, feedback);

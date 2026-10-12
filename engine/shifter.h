@@ -14,10 +14,11 @@ namespace bitch {
 // after 2 ms, through a soft clip (barberpole sweeps without running away).
 class Shifter {
   public:
-    static constexpr int kFeedbackDelay = 96; // 2 ms at 48 kHz
+    static constexpr int kFeedbackDelay = 96; // 2 ms; assumes 48 kHz: the feedback delay is a fixed 96 samples
 
+    // Assumes 48 kHz: the feedback delay is a fixed 96 samples.
     void Init(float sample_rate) {
-        sample_rate_ = sample_rate;
+        inv_sample_rate_ = 1.f / sample_rate;
         Reset();
     }
 
@@ -34,7 +35,7 @@ class Shifter {
         float in = x + feedback * SoftClip(delayed);
         float i, q;
         hilbert_.Process(in, i, q);
-        phase_ += shift_hz / sample_rate_;
+        phase_ += shift_hz * inv_sample_rate_;
         phase_ -= floorf(phase_);
         float angle = 6.28318530718f * phase_;
         float out = i * cosf(angle) + q * sinf(angle);
@@ -45,7 +46,7 @@ class Shifter {
 
   private:
     Hilbert hilbert_;
-    float sample_rate_ = 48000.f;
+    float inv_sample_rate_ = 1.f / 48000.f;
     float phase_ = 0.f;
     float feedback_buffer_[kFeedbackDelay] = {};
     int position_ = 0;

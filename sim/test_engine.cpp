@@ -26,7 +26,7 @@ static const float kPi = 3.14159265358979f;
 
 // I and Q of a sine must have equal level and be uncorrelated (90 degrees apart)
 static void TestHilbertQuadrature() {
-    for (float freq : {100.f, 1000.f, 5000.f, 15000.f}) {
+    for (float freq : {40.f, 100.f, 1000.f, 5000.f, 15000.f}) {
         bitch::Hilbert h;
         h.Reset();
         double ii = 0, qq = 0, iq = 0;
@@ -140,6 +140,7 @@ static void TestEngineShiftAndMix() {
     auto wet = RunEngine(p, 0.25f, &right);
     CHECK(Magnitude(wet, 1100.f) > 0.2, "engine wet: 1100 Hz level %.3f", Magnitude(wet, 1100.f));
     CHECK(Magnitude(wet, 1000.f) < 0.01, "engine wet: dry leaking %.3f", Magnitude(wet, 1000.f));
+    // L and R are identical until Reception makes them drift apart
     CHECK(fabs(Magnitude(right, 1100.f) - Magnitude(wet, 1100.f)) < 0.01, "engine: L/R differ");
     p.mix = 0.f;
     auto dry = RunEngine(p, 0.25f);
@@ -172,6 +173,60 @@ static void TestEngineRecoversFromNaN() {
     for (float v : out_l) CHECK(std::isfinite(v), "engine NaN: did not recover");
 }
 
+static void TestEngineNonFiniteMidBlock() {
+    for (float bad : {(float)NAN, (float)INFINITY}) {
+        bitch::Engine e;
+        e.Init(kSampleRate);
+        bitch::Params p;
+        p.tune_hz = 100.f;
+        float in[48], out_l[48], out_r[48];
+        for (int k = 0; k < 48; k++) in[k] = 0.25f * sinf(2 * kPi * 1000.f * k / kSampleRate);
+        in[std::isnan(bad) ? 20 : 47] = bad;
+        e.Process(in, in, out_l, out_r, 48, p);
+        for (int k = 0; k < 48; k++)
+            CHECK(std::isfinite(out_l[k]) && std::isfinite(out_r[k]), "mid-block %g: output %d not finite", bad, k);
+        for (int k = 0; k < 48; k++) in[k] = 0.25f * sinf(2 * kPi * 1000.f * k / kSampleRate);
+        e.Process(in, in, out_l, out_r, 48, p);
+        for (int k = 0; k < 48; k++)
+            CHECK(std::isfinite(out_l[k]) && std::isfinite(out_r[k]), "mid-block %g: next block %d not finite", bad, k);
+    }
+}
+
+static void TestEngineNaNTune() {
+    bitch::Engine e;
+    e.Init(kSampleRate);
+    bitch::Params p;
+    p.tune_hz = NAN;
+    float in[48], out_l[48], out_r[48];
+    for (int b = 0; b < 20; b++) {
+        for (int k = 0; k < 48; k++) in[k] = 0.25f * sinf(2 * kPi * 1000.f * (b * 48 + k) / kSampleRate);
+        e.Process(in, in, out_l, out_r, 48, p);
+        for (int k = 0; k < 48; k++)
+            CHECK(std::isfinite(out_l[k]) && std::isfinite(out_r[k]), "NaN tune: block %d sample %d not finite", b, k);
+    }
+}
+
+static void TestEngineMonoSum() {
+    bitch::Engine e;
+    e.Init(kSampleRate);
+    bitch::Params p;
+    p.tune_hz = 100.f;
+    p.mix = 1.f;
+    std::vector<float> l, r;
+    int n = (int)kSampleRate;
+    float in[48], zeros[48] = {}, out_l[48], out_r[48];
+    for (int t = 0; t < n; t += 48) {
+        for (int k = 0; k < 48; k++) in[k] = 0.25f * sinf(2 * kPi * 1000.f * (t + k) / kSampleRate);
+        e.Process(in, zeros, out_l, out_r, 48, p);
+        if (t >= n / 2) {
+            l.insert(l.end(), out_l, out_l + 48);
+            r.insert(r.end(), out_r, out_r + 48);
+        }
+    }
+    CHECK(fabs(Magnitude(l, 1100.f) - 0.125) < 0.02, "mono sum: OUT L 1100 Hz level %.4f", Magnitude(l, 1100.f));
+    CHECK(fabs(Magnitude(r, 1100.f) - 0.125) < 0.02, "mono sum: OUT R 1100 Hz level %.4f", Magnitude(r, 1100.f));
+}
+
 static void TestSoftClip() {
     bool bounded = true;
     for (float x = -4.f; x <= 4.f; x += 0.0001f) bounded = bounded && fabsf(bitch::SoftClip(x)) <= 1.f;
@@ -189,6 +244,9 @@ int main() {
     TestEngineShiftAndMix();
     TestEngineLimiter();
     TestEngineRecoversFromNaN();
+    TestEngineNonFiniteMidBlock();
+    TestEngineNaNTune();
+    TestEngineMonoSum();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }

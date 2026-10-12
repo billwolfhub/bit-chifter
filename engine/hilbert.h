@@ -3,9 +3,8 @@
 namespace bitch {
 
 // 90-degree phase splitter: two parallel chains of four second-order allpass
-// sections (Olli Niemitalo's coefficients). The two outputs (the A chain one sample
-// later (I), and the B chain (Q)) stay 90 degrees apart, within a fraction of a degree, from about 20 Hz to
-// over 20 kHz at 48 kHz.
+// sections (Olli Niemitalo's coefficients). I is the A chain delayed by one sample,
+// Q is the B chain; they stay 90 degrees apart from about 40 Hz to over 20 kHz at 48 kHz.
 class Hilbert {
   public:
     void Reset() {
