@@ -462,7 +462,7 @@ class Shifter {
         phase_ += shift_hz / sample_rate_;
         phase_ -= floorf(phase_);
         float angle = 6.28318530718f * phase_;
-        float out = i * cosf(angle) - q * sinf(angle);
+        float out = i * cosf(angle) + q * sinf(angle);
         feedback_buffer_[position_] = out;
         position_ = (position_ + 1) % kFeedbackDelay;
         return out;
