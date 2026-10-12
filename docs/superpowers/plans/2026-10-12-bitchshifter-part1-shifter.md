@@ -269,24 +269,24 @@ inline float SoftClip(float x) {
 namespace bitch {
 
 // 90-degree phase splitter: two parallel chains of four second-order allpass
-// sections (Olli Niemitalo's coefficients). The two outputs (I, and Q one sample
-// later) stay 90 degrees apart, within a fraction of a degree, from about 20 Hz to
+// sections (Olli Niemitalo's coefficients). The two outputs (the A chain one
+// sample later (I), and the B chain (Q)) stay 90 degrees apart, within a fraction of a degree, from about 20 Hz to
 // over 20 kHz at 48 kHz.
 class Hilbert {
   public:
     void Reset() {
         for (State &s : a_) s = State();
         for (State &s : b_) s = State();
-        b_delay_ = 0.f;
+        a_delay_ = 0.f;
     }
 
     void Process(float x, float &i, float &q) {
         float a = x, b = x;
         for (int k = 0; k < 4; k++) a = Section(a, kA[k], a_[k]);
         for (int k = 0; k < 4; k++) b = Section(b, kB[k], b_[k]);
-        i = a;
-        q = b_delay_;
-        b_delay_ = b;
+        i = a_delay_;
+        a_delay_ = a;
+        q = b;
     }
 
   private:
@@ -309,7 +309,7 @@ class Hilbert {
     static constexpr float kB[4] = {0.4021921162426f * 0.4021921162426f, 0.8561710882420f * 0.8561710882420f,
                                     0.9722909545651f * 0.9722909545651f, 0.9952884791278f * 0.9952884791278f};
     State a_[4], b_[4];
-    float b_delay_ = 0.f;
+    float a_delay_ = 0.f;
 };
 
 } // namespace bitch
