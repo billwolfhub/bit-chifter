@@ -27,7 +27,7 @@ envelope follower). Local project only (`~/local_files/daisy/bitchshifter`).
 ### Faders
 | Fader | Control |
 |---|---|
-| **1 TUNE** | Base shift: −2500 Hz … **0 at centre** … +2500 Hz. Response is cubic around the centre (fine mistuning near 0, wild at the ends). Stations and keyboard offsets add to it. |
+| **1 TUNE** | Shift: −2500 Hz … **0 at centre** … +2500 Hz. Response is cubic around the centre (fine mistuning near 0, wild at the ends). A recalled station replaces it until the fader moves; keyboard offsets add to it. |
 | **2 RECEPTION** | Macro, clear → lost in the noise: static and crackle level, fading depth, drift amount, AGC strength and drive all rise together. At the bottom the receiver effects are off. |
 
 ### Knobs
@@ -43,9 +43,23 @@ envelope follower). Local project only (`~/local_files/daisy/bitchshifter`).
 ### Switch 1: pad mode
 | Position | Pads |
 |---|---|
-| **Stations** | 12 stored tunings (shift offset, filter centre and width, carrier, ring amount). Touch = glide ("dial swoop") from the current tuning to the station. Hold a pad ≥ 2 s = store the current settings there (saved to QSPI). |
+| **Stations** | 12 stored tunings (see Stations in detail). Touch = glide ("dial swoop") from the current tuning to the station. Hold a pad ≥ 2 s = store (saved to QSPI). |
 | **Keyboard** | Chromatic octave, pad 1–12 = C…B, playing the ring-mod carrier (base set by knob 2 transpose; middle octave C3 = 130.8 Hz). The shift also follows the note when knob 1 RING is at 0 (musical, pitch-shift-like use). **Hold:** touching a pad for ≥ 1 s latches it; the note keeps sounding until another pad is touched. |
 | **Performance** | Momentary (or latched, see switch 2) effects — initial set, refined at step 6: 1 feedback burst (95%), 2 static burst, 3 filter slam (narrowest, max resonance), 4 signal fades out, 5 drift to maximum, 6 ring mod 100%, 7 squelch (wet muted), 8 dial spins up, 9 dial spins down, 10 hold drift (freeze the wander), 11 carrier ×2, 12 kill dry. |
+
+### Stations in detail
+- **What a station holds:** the TUNE shift, filter centre, filter width, carrier and ring
+  amount (absolute values, not offsets).
+- **Storing:** hold a pad ≥ 2 s. It stores the settings the knobs and faders were at
+  **when the pad was first touched**, not the half-glided sound that plays while holding.
+  In practice: set the controls, then hold the pad.
+- **Recall and takeover:** a tap glides to the station, and its values replace the
+  controls'. Each knob or fader takes its parameter back as soon as it is moved (more
+  than ~2% from where it was at the recall), jumping from the station's value to the
+  control's position. Untouched controls keep the station's values. No pickup: without
+  a screen, an immediate takeover is easier to follow.
+- **Confirmation:** a successful store plays a short audible chirp (a quick rising dial
+  sweep, mixed into the output) and blinks the Seed's LED (if visible on the board).
 
 ### Switch 2: modifier (depends on switch 1)
 | Mode | Left | Middle | Right |
@@ -77,7 +91,7 @@ shift drift and fading wander independently (shared controls, different random p
    - Single-sideband output `I·cos − Q·sin`.
    - **Feedback:** output → 2 ms delay → `tanh` soft clip → × knob 5 → added to the
      shifter input. The delay keeps the loop stable and gives the barberpole its smear.
-   - Shift = TUNE + station/keyboard offset + drift, glided.
+   - Shift = (TUNE, or the recalled station's shift) + keyboard offset + drift, glided.
 4. **Radio filter:** two state-variable band-pass filters in series (DaisySP `Svf`),
    same centre (knob 3) and Q from knob 4 (≈ 0.7 wide → ≈ 12 narrow), with gain
    compensation so narrowing doesn't drop the level much.
