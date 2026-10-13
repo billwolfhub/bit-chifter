@@ -1,8 +1,10 @@
 // Renders a 16-bit WAV through the Bitchshifter engine.
 // Usage: render in.wav out.wav [tune=Hz] [fb=0-0.95] [mix=0-1] [ring=0-1] [carrier=Hz]
 //                              [filter=Hz] [q=0.7-12] [open=0-1] [reception=0-1]
-//                              [stereo=linked|mirror|rotate]
+//                              [detent=0-0.95] [inertia=s] [sweep=Hz] [stereo=linked|mirror|rotate]
+// sweep=Hz ramps the tune linearly from tune= (at the start) to sweep= (at the end of the file).
 // (defaults are the engine's: no shift, no ring mod, filter open, linked)
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -10,7 +12,7 @@
 #include "engine.h"
 #include "wav.h"
 
-static bool SetOption(bitch::Params &p, const char *arg) {
+static bool SetOption(bitch::Params &p, float &sweep_to, const char *arg) {
     const char *eq = strchr(arg, '=');
     if (!eq) return false;
     size_t n = (size_t)(eq - arg);
@@ -28,7 +30,8 @@ static bool SetOption(bitch::Params &p, const char *arg) {
     } fields[] = {{"tune", &p.tune_hz},     {"fb", &p.feedback},        {"mix", &p.mix},
                   {"ring", &p.ring},        {"carrier", &p.carrier_hz}, {"filter", &p.filter_hz},
                   {"q", &p.filter_q},       {"open", &p.filter_open},
-                  {"reception", &p.reception}};
+                  {"reception", &p.reception}, {"detent", &p.detent},
+                  {"inertia", &p.dial_inertia_s}, {"sweep", &sweep_to}};
     for (auto &f : fields) {
         if (strlen(f.name) == n && strncmp(arg, f.name, n) == 0) {
             *f.field = (float)atof(value);
@@ -42,13 +45,14 @@ int main(int argc, char **argv) {
     if (argc < 3) {
         fprintf(stderr,
                 "Usage: %s in.wav out.wav [tune=] [fb=] [mix=] [ring=] [carrier=] [filter=] [q=] [open=] "
-                "[reception=] [stereo=linked|mirror|rotate]\n",
+                "[reception=] [detent=] [inertia=] [sweep=Hz] [stereo=linked|mirror|rotate]\n",
                 argv[0]);
         return 1;
     }
     bitch::Params p;
+    float sweep_to = NAN;
     for (int i = 3; i < argc; i++) {
-        if (!SetOption(p, argv[i])) {
+        if (!SetOption(p, sweep_to, argv[i])) {
             fprintf(stderr, "Unknown option %s\n", argv[i]);
             return 1;
         }
@@ -65,15 +69,21 @@ int main(int argc, char **argv) {
     out.left.resize(in.left.size());
     out.right.resize(in.left.size());
     const size_t block = 48;
-    for (size_t i = 0; i + block <= in.left.size(); i += block)
+    const float tune_from = p.tune_hz;
+    for (size_t i = 0; i + block <= in.left.size(); i += block) {
+        if (!std::isnan(sweep_to)) p.tune_hz = tune_from + (sweep_to - tune_from) * (float)i / (float)in.left.size();
         engine.Process(&in.left[i], &in.right[i], &out.left[i], &out.right[i], block, p);
+    }
+    p.tune_hz = tune_from;
     if (!WriteWav(argv[2], out)) {
         fprintf(stderr, "Couldn't write %s\n", argv[2]);
         return 1;
     }
     static const char *modes[3] = {"linked", "mirror", "rotate"};
-    printf("Wrote %s (tune %g fb %g mix %g ring %g carrier %g filter %g q %g open %g reception %g stereo %s)\n", argv[2],
+    printf("Wrote %s (tune %g fb %g mix %g ring %g carrier %g filter %g q %g open %g reception %g detent %g inertia %g", argv[2],
            p.tune_hz, p.feedback, p.mix, p.ring, p.carrier_hz, p.filter_hz, p.filter_q, p.filter_open, p.reception,
-           modes[(int)p.stereo_mode]);
+           p.detent, p.dial_inertia_s);
+    if (!std::isnan(sweep_to)) printf(" sweep %g", sweep_to);
+    printf(" stereo %s)\n", modes[(int)p.stereo_mode]);
     return 0;
 }
