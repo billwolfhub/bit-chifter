@@ -76,6 +76,7 @@ void Engine::Reset() {
     for (StaticNoise &n : static_) n.Reset();
     dial_[0] = dial_[1] = 0.f;
     detent_amount_ = 0.f;
+    detent_pitch_ = 0.f;
     target_shift_ = 0.f;
     pitch_.Reset();
 }
@@ -134,7 +135,10 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
     float detent_glide = detent_target > detent_amount_ ? block_glide_ : detent_release_;
     detent_amount_ += detent_glide * (detent_target - detent_amount_);
     if (detent_amount_ < 1e-4f && detent_target == 0.f) detent_amount_ = 0.f;
-    target_shift_ = SoftQuantize(dial + hand, pitch_.Pitch(), detent_amount_);
+    // The pull's pitch follows the tracker only for a pitch at least as sure as the current
+    // pull, so a weak (often wrong) estimate can't steer the detents while they release
+    if (detent_target >= detent_amount_) detent_pitch_ = pitch_.Pitch();
+    target_shift_ = SoftQuantize(dial + hand, detent_pitch_, detent_amount_);
 
     // Mono detection: a side whose input is silent takes the other side's input instead
     float take_target[2] = {active_[1] && !active_[0] ? 1.f : 0.f, active_[0] && !active_[1] ? 1.f : 0.f};

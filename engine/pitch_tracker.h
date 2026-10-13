@@ -13,7 +13,7 @@ class PitchTracker {
   public:
     static constexpr int kDecimate = 6;   // 48 kHz -> 8 kHz (the lags below assume 48 kHz)
     static constexpr int kWindow = 256;   // 32 ms at 8 kHz
-    static constexpr int kMinLag = 10;    // 800 Hz
+    static constexpr int kMinLag = 10;    // 800 Hz; effectively ~795 (exactly 800 reports its 400 Hz subharmonic)
     static constexpr int kMaxLag = 133;   // ~60 Hz
     static constexpr int kFrame = kWindow + kMaxLag + 1;
     static constexpr int kLagsPerWork = 6; // all 133 lags (1..133) in 23 blocks, well within 32 ms

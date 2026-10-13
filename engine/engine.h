@@ -94,6 +94,7 @@ class Engine {
     Wander hand_;                // wanders the dial with reception (shared by both sides)
     PitchTracker pitch_;
     float detent_amount_ = 0.f;  // strength x confidence, smoothed per block
+    float detent_pitch_ = 0.f;   // the pitch the detents pull towards (held while they release)
     float target_shift_ = 0.f;   // the dial's shift for this block; shift_hz_ glides to it
 };
 

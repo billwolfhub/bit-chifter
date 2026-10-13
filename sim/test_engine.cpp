@@ -1206,6 +1206,24 @@ static void TestEngineDetentsRelease() {
           after.back());
 }
 
+// While the detents release, a weak, wrong pitch (noise plus a faint 530 Hz tone) must not
+// take over the pull: the shift only goes from the 120 Hz detent (~111.5 Hz) back to TUNE
+static void TestEngineDetentsHoldPitch() {
+    bitch::Params p;
+    p.tune_hz = 100.f;
+    p.detent = 0.7f;
+    bitch::Engine e;
+    e.Init(kSampleRate);
+    ShiftTrace(e, p, 1.5f, Sawtooth120);
+    uint32_t seed = 7;
+    auto after = ShiftTrace(e, p, 0.3f, [&seed](int n) {
+        seed = seed * 1664525u + 1013904223u;
+        return 0.15f * sinf(2 * kPi * 530.f * n / kSampleRate) + 0.8f * ((seed >> 8) / 8388608.f - 1.f);
+    });
+    float lowest = *std::min_element(after.begin(), after.end());
+    CHECK(lowest > 99.f, "detents hold pitch: shift fell to %.2f Hz on a weak wrong pitch", lowest);
+}
+
 // Mirror with detents: the right side's shift is exactly the opposite of the left's
 static void TestEngineMirrorDetents() {
     bitch::Params p;
@@ -1308,6 +1326,7 @@ int main() {
     TestEngineDetents();
     TestEngineDialInertiaFromStart();
     TestEngineDetentsRelease();
+    TestEngineDetentsHoldPitch();
     TestEngineMirrorDetents();
     TestEngineTuningHand();
     if (failures == 0) printf("All tests passed\n");
