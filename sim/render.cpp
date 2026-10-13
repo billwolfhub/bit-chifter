@@ -2,6 +2,8 @@
 // Usage: render in.wav out.wav [tune=Hz] [fb=0-0.95] [mix=0-1] [ring=0-1] [carrier=Hz]
 //                              [filter=Hz] [q=0.7-12] [open=0-1] [reception=0-1]
 //                              [detent=0-0.95] [inertia=s] [reverb=0-1] [sweep=Hz] [stereo=linked|mirror|rotate]
+//                              [amount=0.35-1] [effects=name,name] [every=s]
+// effects= turns on pad effects by name (effects.h); every=s toggles them on for s seconds, off for s, ...
 // sweep=Hz ramps the tune linearly from tune= (at the start) to sweep= (at the end of the file).
 // (defaults are the engine's: no shift, no ring mod, filter open, linked)
 #include <cmath>
@@ -9,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "effects.h"
 #include "engine.h"
 #include "wav.h"
 
@@ -32,7 +35,7 @@ static bool SetOption(bitch::Params &p, float &sweep_to, const char *arg) {
                   {"q", &p.filter_q},       {"open", &p.filter_open},
                   {"reception", &p.reception}, {"detent", &p.detent},
                   {"inertia", &p.dial_inertia_s}, {"reverb", &p.reverb},
-                  {"sweep", &sweep_to}};
+                  {"sweep", &sweep_to},   {"amount", &p.effect_amount}};
     for (auto &f : fields) {
         if (strlen(f.name) == n && strncmp(arg, f.name, n) == 0) {
             *f.field = (float)atof(value);
@@ -46,13 +49,34 @@ int main(int argc, char **argv) {
     if (argc < 3) {
         fprintf(stderr,
                 "Usage: %s in.wav out.wav [tune=] [fb=] [mix=] [ring=] [carrier=] [filter=] [q=] [open=] "
-                "[reception=] [detent=] [inertia=] [reverb=0-1] [sweep=Hz] [stereo=linked|mirror|rotate]\n",
+                "[reception=] [detent=] [inertia=] [reverb=0-1] [sweep=Hz] [stereo=linked|mirror|rotate] [amount=0.35-1] [effects=name,name] [every=s]\n",
                 argv[0]);
         return 1;
     }
     bitch::Params p;
     float sweep_to = NAN;
+    float every = 0.f; // seconds; 0 = effects on all the time
     for (int i = 3; i < argc; i++) {
+        if (strncmp(argv[i], "effects=", 8) == 0) {
+            // A comma-separated list of effect names (effects.h), e.g. effects=squelch,spin_up
+            char list[256];
+            snprintf(list, sizeof(list), "%s", argv[i] + 8);
+            for (char *name = strtok(list, ","); name; name = strtok(nullptr, ",")) {
+                int found = -1;
+                for (int e = 0; e < bitch::kEffectCount; e++)
+                    if (strcmp(name, bitch::EffectName(e)) == 0) found = e;
+                if (found < 0) {
+                    fprintf(stderr, "unknown effect: %s\n", name);
+                    return 1;
+                }
+                p.effects |= 1u << found;
+            }
+            continue;
+        }
+        if (strncmp(argv[i], "every=", 6) == 0) {
+            every = (float)atof(argv[i] + 6); // effects on for `every` seconds, off for `every`, ...
+            continue;
+        }
         if (!SetOption(p, sweep_to, argv[i])) {
             fprintf(stderr, "Unknown option %s\n", argv[i]);
             return 1;
@@ -72,19 +96,29 @@ int main(int argc, char **argv) {
     out.right.resize(in.left.size());
     const size_t block = 48;
     const float tune_from = p.tune_hz;
+    const uint32_t effects_on = p.effects;
     for (size_t i = 0; i + block <= in.left.size(); i += block) {
         if (!std::isnan(sweep_to)) p.tune_hz = tune_from + (sweep_to - tune_from) * (float)i / (float)in.left.size();
+        if (every > 0.f) {
+            float t = (float)i / (float)in.sample_rate;
+            p.effects = fmodf(t, 2.f * every) < every ? effects_on : 0u;
+        }
         engine.Process(&in.left[i], &in.right[i], &out.left[i], &out.right[i], block, p);
     }
     p.tune_hz = tune_from;
+    p.effects = effects_on;
     if (!WriteWav(argv[2], out)) {
         fprintf(stderr, "Couldn't write %s\n", argv[2]);
         return 1;
     }
+    char names[512] = "";
+    for (int e = 0; e < bitch::kEffectCount; e++)
+        if (p.effects & (1u << e)) snprintf(names + strlen(names), sizeof(names) - strlen(names), "%s%s", names[0] ? "," : "", bitch::EffectName(e));
+    if (!names[0]) snprintf(names, sizeof(names), "none");
     static const char *modes[3] = {"linked", "mirror", "rotate"};
-    printf("Wrote %s (tune %g fb %g mix %g ring %g carrier %g filter %g q %g open %g reception %g detent %g inertia %g reverb %g", argv[2],
+    printf("Wrote %s (tune %g fb %g mix %g ring %g carrier %g filter %g q %g open %g reception %g detent %g inertia %g reverb %g amount %g effects %s", argv[2],
            p.tune_hz, p.feedback, p.mix, p.ring, p.carrier_hz, p.filter_hz, p.filter_q, p.filter_open, p.reception,
-           p.detent, p.dial_inertia_s, p.reverb);
+           p.detent, p.dial_inertia_s, p.reverb, p.effect_amount, names);
     if (!std::isnan(sweep_to)) printf(" sweep %g", sweep_to);
     printf(" stereo %s)\n", modes[(int)p.stereo_mode]);
     return 0;
