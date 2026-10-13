@@ -15,6 +15,7 @@ namespace bitch {
 //   page it was touched on; latches stay on across page changes.
 // - TOU (channel 10): a tap steps the stereo mode (counted on the release, so a hold
 //   doesn't); holding it 1 s clears every latched effect (held pads stay on until released).
+//   A release between the two (0.3 to 1 s) does neither.
 class PadPages {
   public:
     enum : uint32_t { kTapMs = 300, kClearMs = 1000 };
@@ -30,8 +31,8 @@ class PadPages {
                 down_ms_[ch] = now_ms;
                 was_latched_[ch] = (latched_ >> e) & 1u;
                 held_ |= 1u << e;
-                touched_[ch] = true;
-            } else if (!on && was && touched_[ch]) {
+                taken_[ch] = true;
+            } else if (!on && was && taken_[ch]) {
                 uint32_t bit = 1u << effect_[ch];
                 if (now_ms - down_ms_[ch] < kTapMs && !was_latched_[ch]) {
                     latched_ |= bit;
@@ -39,7 +40,7 @@ class PadPages {
                     latched_ &= ~bit;
                 }
                 held_ &= ~bit;
-                touched_[ch] = false;
+                taken_[ch] = false;
             }
         }
         bool on = (touched >> kStereoPad) & 1u, was = (was_touched_ >> kStereoPad) & 1u;
@@ -51,7 +52,13 @@ class PadPages {
             stereo_cleared_ = true;
             cleared_ = true;
         } else if (!on && was && !stereo_cleared_) {
-            stereo_steps_++;
+            uint32_t held_ms = now_ms - stereo_down_ms_;
+            if (held_ms >= kClearMs) { // released at 1 s, before an update while held saw it
+                latched_ = 0;
+                cleared_ = true;
+            } else if (held_ms < kTapMs) {
+                stereo_steps_++;
+            }
         }
         was_touched_ = touched;
     }
@@ -75,7 +82,7 @@ class PadPages {
     uint32_t down_ms_[kPads] = {};
     int effect_[kPads] = {};          // the effect each touched pad turned on
     bool was_latched_[kPads] = {};    // that effect was latched when the pad was touched
-    bool touched_[kPads] = {};        // the pad's touch was taken (it had an effect)
+    bool taken_[kPads] = {};          // the pad's touch was taken (it had an effect)
     uint32_t stereo_down_ms_ = 0;
     bool stereo_cleared_ = false;     // this TOU touch already cleared the latches
     int stereo_steps_ = 0;

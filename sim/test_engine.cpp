@@ -1665,6 +1665,20 @@ static void TestPadPages() {
     step(10, 0, 0);
     CHECK(pp.TakeStereoSteps() == 0 && pp.Effects() == 0, "TOU hold: stepped the stereo mode, or left %08x",
           pp.Effects());
+    // TOU held 0.6 s (longer than a tap, shorter than a clear): neither a stereo step nor a clear
+    step(10, 1u << 7, 0);
+    step(50, 0, 0);
+    step(10, 1u << 10, 0);
+    for (int i = 0; i < 60; i++) step(10, 1u << 10, 0);
+    step(10, 0, 0);
+    CHECK(pp.TakeStereoSteps() == 0 && !pp.TakeCleared() && pp.Latched() == Bit(kSpiralDown),
+          "TOU held 0.6 s: a stereo step or a clear (latched %08x)", pp.Latched());
+    // TOU released at exactly 1 s, with no update in between at 1 s or more: a clear
+    step(10, 1u << 10, 0);
+    for (int i = 0; i < 99; i++) step(10, 1u << 10, 0);
+    step(10, 0, 0);
+    CHECK(pp.TakeCleared() && pp.TakeStereoSteps() == 0 && pp.Latched() == 0,
+          "TOU released at 1 s: not a clear (latched %08x)", pp.Latched());
 }
 
 static void TestLowBlip() {
@@ -1811,26 +1825,59 @@ static void TestEffectFilterSlam() {
     }
 }
 
-// Switching effects on and off doesn't click (not Squelch: its opening noise burst is meant to be abrupt)
-static void TestEffectsNoClick() {
+// Switching effects on and off doesn't click: in the 35 ms after each toggle (the ~30 ms fade),
+// no step between samples is more than 2.5x the largest in the steady 15 ms just before and
+// after it. Squelch is toggled too, but the 30 ms after each release are skipped (its opening
+// noise burst is meant to be abrupt). Static burst isn't toggled: its crackles jump by design.
+// Returns the worst ratio over the toggles.
+static float NoClickWorstRatio(uint32_t seed) {
+    const bitch::Effect kToggled[8] = {bitch::kFadeOut,    bitch::kKillDry,       bitch::kRing100,
+                                       bitch::kCarrierX2,  bitch::kFilterSlam,    bitch::kFeedbackBurst,
+                                       bitch::kDriftMax,   bitch::kSquelch};
     bitch::Engine e;
     e.Init(kSampleRate);
     bitch::Params p;
     p.mix = 0.5f;
     p.carrier_hz = 300.f;
-    const uint32_t kToggled[4] = {bitch::Bit(bitch::kFadeOut), bitch::Bit(bitch::kKillDry),
-                                  bitch::Bit(bitch::kRing100), bitch::Bit(bitch::kCarrierX2)};
+    p.tune_hz = 50.f;
+    p.filter_hz = 800.f; // closed at a low Q, so Filter slam has something to change
+    p.filter_q = 0.7f;
+    p.filter_open = 0.f;
     std::vector<float> l, r;
+    std::vector<bool> skip;
     int n = 0;
-    uint32_t seed = 17;
-    for (int i = 0; i < 60; i++) {
+    const int kToggles = 60;
+    const size_t segment = (size_t)(0.05f * kSampleRate), fade = (size_t)(0.035f * kSampleRate);
+    for (int i = 0; i < kToggles; i++) {
         seed = seed * 1664525u + 1013904223u;
-        p.effects ^= kToggled[(seed >> 16) % 4];
+        bitch::Effect fx = kToggled[(seed >> 16) % 8];
+        bool release = fx == bitch::kSquelch && bitch::Has(p.effects, fx);
+        p.effects ^= bitch::Bit(fx);
+        size_t from = l.size();
         RunFor(e, p, 0.05f, [](int k) { return Sine(200.f, 0.3f, k); }, n, l, r);
+        skip.resize(l.size(), false);
+        if (release)
+            for (size_t k = from; k < std::min(l.size(), from + (size_t)(0.03f * kSampleRate)); k++) skip[k] = true;
     }
-    float step = 0.f;
-    for (size_t k = 1; k < l.size(); k++) step = std::max(step, fabsf(l[k] - l[k - 1]));
-    CHECK(step < 0.06f, "effects on/off: a step of %.3f between samples", step);
+    auto max_step = [&](size_t from, size_t to) {
+        float step = 0.f;
+        for (size_t k = std::max<size_t>(from, 1); k < std::min(to, l.size()); k++)
+            if (!skip[k]) step = std::max(step, fabsf(l[k] - l[k - 1]));
+        return step;
+    };
+    float worst = 0.f;
+    for (int i = 1; i < kToggles; i++) {
+        size_t at = i * segment;
+        float during = max_step(at, at + fade);
+        float steady = std::max(max_step(at - (segment - fade), at), max_step(at + fade, at + segment));
+        if (steady > 0.f) worst = std::max(worst, during / steady);
+    }
+    return worst;
+}
+
+static void TestEffectsNoClick() {
+    float a = NoClickWorstRatio(17u), b = NoClickWorstRatio(4242u);
+    CHECK(a < 2.5f && b < 2.5f, "effects on/off: a step %.2fx / %.2fx the steady ones around it", a, b);
 }
 
 static void TestEffectStaticBurst() {
@@ -1901,6 +1948,24 @@ static void TestEffectFadeOut() {
     RunFor(e, p, 2.f, tone, n, l, r);
     double back = Db(Magnitude(Window(l, 3.8f, 4.f), 1000.f) / ref);
     CHECK(fabs(back) < 1.0, "fade-out: %.1f dB, 1.8 s after it ended", back);
+    // At mix 0.5 the dry signal fades as well
+    bitch::Params half;
+    half.mix = 0.5f;
+    bitch::Engine ref_half_engine, half_engine;
+    ref_half_engine.Init(kSampleRate);
+    half_engine.Init(kSampleRate);
+    ref_l.clear();
+    ref_r.clear();
+    n = 0;
+    RunFor(ref_half_engine, half, 1.f, tone, n, ref_l, ref_r);
+    double ref_half = Magnitude(Window(ref_l, 0.5f, 1.f), 1000.f);
+    l.clear();
+    r.clear();
+    n = 0;
+    half.effects = bitch::Bit(bitch::kFadeOut);
+    RunFor(half_engine, half, 2.f, tone, n, l, r);
+    double faded_half = Db(Magnitude(Window(l, 1.8f, 2.f), 1000.f) / ref_half);
+    CHECK(faded_half < -35.0, "fade-out at mix 0.5: only %.1f dB down after 1.8 s", faded_half);
 }
 
 static void TestEffectSquelch() {
@@ -1965,6 +2030,83 @@ static void TestEffectSpins() {
     auto gentle = ShiftTraceFine(slow, p, 1.f, silence);
     CHECK(fabsf(gentle.back() - 150.f) < 20.f, "spin up at amount 0.35: %.0f Hz after 1 s (want ~150)",
           gentle.back());
+}
+
+// Drift to maximum in Linked mode: the phase lock doesn't fight the drift (no jumps in the
+// right side's frequency, and the sides drift apart); nor does it while Hold drift keeps a drift
+static void TestEffectDriftLinked() {
+    auto silence = [](int) { return 0.f; };
+    const float kReceptions[2] = {0.f, 0.02f};
+    for (float reception : kReceptions) {
+        bitch::Engine e;
+        e.Init(kSampleRate);
+        bitch::Params p;
+        p.reception = reception;
+        p.effects = bitch::Bit(bitch::kDriftMax);
+        std::vector<float> left, right;
+        ShiftTraces(e, p, 10.f, silence, left, right);
+        float jump = 0.f, apart = 0.f;
+        for (size_t k = 1; k < right.size(); k++) jump = std::max(jump, fabsf(right[k] - right[k - 1]));
+        for (size_t k = 0; k < right.size(); k++) apart = std::max(apart, fabsf(right[k] - left[k]));
+        CHECK(jump < 1.f, "drift to maximum, reception %.2f: the right side jumps %.2f Hz between blocks", reception,
+              jump);
+        CHECK(apart > 3.f, "drift to maximum, reception %.2f: the sides only %.2f Hz apart", reception, apart);
+    }
+    // Hold drift once the sides have drifted apart: they stay as they are
+    bitch::Engine e;
+    e.Init(kSampleRate);
+    bitch::Params p;
+    p.effects = bitch::Bit(bitch::kDriftMax);
+    std::vector<float> left, right;
+    for (int i = 0; i < 100 && (left.empty() || fabsf(right.back() - left.back()) < 3.f); i++)
+        ShiftTraces(e, p, 0.1f, silence, left, right);
+    float start = right.back() - left.back();
+    CHECK(fabsf(start) >= 3.f, "drift to maximum: the sides never 3 Hz apart (%.2f)", start);
+    p.effects = bitch::Bit(bitch::kHoldDrift);
+    left.clear();
+    right.clear();
+    ShiftTraces(e, p, 3.f, silence, left, right);
+    float moved = 0.f;
+    for (size_t k = 0; k < right.size(); k++) moved = std::max(moved, fabsf(right[k] - left[k] - start));
+    CHECK(moved < 0.1f, "hold drift, Linked: the sides' difference moved %.3f Hz (from %.2f)", moved, start);
+}
+
+// Every effect at once (but Squelch and Fade-out) at the extremes, the spins switching every
+// second: the output stays finite and within +-1
+static void TestEffectsStable() {
+    static bitch::Engine e;
+    static bitch::PlateReverb plate;
+    e.Init(kSampleRate, 48, &plate);
+    bitch::Params p;
+    p.feedback = 0.95f;
+    p.reception = 1.f;
+    p.ring = 1.f;
+    p.carrier_hz = 5000.f;
+    p.stereo_mode = bitch::StereoMode::kRotate;
+    p.reverb = 1.f;
+    p.effect_amount = 1.f;
+    const uint32_t spins = bitch::Bit(bitch::kSpinUp) | bitch::Bit(bitch::kSpinDown);
+    const uint32_t base = ((1u << bitch::kEffectCount) - 1) &
+                          ~(bitch::Bit(bitch::kSquelch) | bitch::Bit(bitch::kFadeOut) | spins);
+    const uint32_t kSpins[4] = {bitch::Bit(bitch::kSpinUp), 0u, bitch::Bit(bitch::kSpinDown), spins};
+    bitch::Random noise_l(5u), noise_r(9u);
+    float in_l[48], in_r[48], out_l[48], out_r[48];
+    bool finite = true;
+    float peak = 0.f;
+    const int blocks_per_s = (int)(kSampleRate / 48);
+    for (int b = 0; b < 30 * blocks_per_s; b++) {
+        p.effects = base | kSpins[(b / blocks_per_s) % 4];
+        for (int k = 0; k < 48; k++) {
+            in_l[k] = 0.9f * noise_l.Bipolar();
+            in_r[k] = 0.9f * noise_r.Bipolar();
+        }
+        e.Process(in_l, in_r, out_l, out_r, 48, p);
+        for (int k = 0; k < 48; k++) {
+            finite = finite && std::isfinite(out_l[k]) && std::isfinite(out_r[k]);
+            peak = std::max(peak, std::max(fabsf(out_l[k]), fabsf(out_r[k])));
+        }
+    }
+    CHECK(finite && peak <= 1.f, "every effect at once: finite %d, peak %g", (int)finite, peak);
 }
 
 int main() {
@@ -2047,6 +2189,8 @@ int main() {
     TestEffectFadeOut();
     TestEffectSquelch();
     TestEffectSpins();
+    TestEffectDriftLinked();
+    TestEffectsStable();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }

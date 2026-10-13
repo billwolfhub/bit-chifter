@@ -22,8 +22,11 @@ class Blips {
     }
 
     // Start() may be called from the main loop while Process() runs in the audio callback.
-    // The count and the pitch travel in one atomic word.
-    void Start(int count, bool low = false) { request_.store(count | (low ? kLow : 0), std::memory_order_relaxed); }
+    // The count and the pitch travel in one atomic word (the count masked to 0-255, so it can't
+    // reach the kLow flag).
+    void Start(int count, bool low = false) {
+        request_.store((count & 0xFF) | (low ? kLow : 0), std::memory_order_relaxed);
+    }
 
     float Process() {
         int r = request_.exchange(0, std::memory_order_relaxed);

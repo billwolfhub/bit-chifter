@@ -114,12 +114,17 @@ class Engine {
     float drift_hz_[2] = {0.f, 0.f}; // each side's drift (kept while Hold drift is on)
     float hand_hz_ = 0.f;            // the tuning hand (kept while Hold drift is on)
     float fade_db_ = 0.f;            // Signal fade-out: 0 to -40 dB
-    float squelch_tail_ = 0.f;       // the noise burst as the squelch opens (1 -> 0)
+    float squelch_tail_ = 0.f;       // the noise burst as the squelch opens (0 -> 1 -> 0)
+    float squelch_attack_ = 0.f;     // per sample, rising in ~2 ms
     float squelch_decay_ = 0.f;      // per sample, ~150 ms
+    bool squelch_rising_ = false;    // the burst's attack
     bool squelch_was_on_ = false;
+    // Feedback burst's and Squelch's levels at the end of the last block: ramped across each
+    // block from there, so their per-block changes don't step
+    float burst_level_ = 0.f, squelch_level_ = 0.f;
     Random squelch_noise_;
     float spin_hz_ = 0.f;     // Dial spin: the dial's extra turn
-    float spin_return_ = 0.f; // per block, ~1 s (the dial coming back after a spin)
+    float spin_return_ = 0.f; // per block, 0.3 s time constant (the dial back in ~1 s after a spin)
 };
 
 } // namespace bitch

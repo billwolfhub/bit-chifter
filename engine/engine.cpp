@@ -44,6 +44,7 @@ void Engine::Init(float sample_rate, size_t block_size, PlateReverb *plate) {
     }
     hand_.Init(block_rate, 47u);
     pitch_.Init(sample_rate);
+    squelch_attack_ = 1.f / (0.002f * sample_rate);
     squelch_decay_ = expf(-1.f / (0.15f * sample_rate));
     squelch_noise_.Seed(61u);
     if (plate_) plate_->Init(sample_rate);
@@ -94,7 +95,9 @@ void Engine::Reset() {
     hand_hz_ = 0.f;
     fade_db_ = 0.f;
     squelch_tail_ = 0.f;
+    squelch_rising_ = false;
     squelch_was_on_ = false;
+    burst_level_ = squelch_level_ = 0.f;
     spin_hz_ = 0.f;
 }
 
@@ -111,13 +114,15 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
     if (block_glide_ == 0.f) {
         block_glide_ = 1.f - expf(-(float)size / (0.03f * sample_rate_));
         detent_release_ = 1.f - expf(-(float)size / (0.15f * sample_rate_));
-        spin_return_ = 1.f - expf(-(float)size / (1.f * sample_rate_));
+        spin_return_ = 1.f - expf(-(float)size / (0.3f * sample_rate_));
         log2_filter_hz_ = log2f(Clamp(params.filter_hz, 150.f, 5000.f));
         filter_q_ = Clamp(params.filter_q, 0.7f, 12.f);
         filter_open_ = Clamp(params.filter_open, 0.f, 1.f);
         reception_ = Clamp(params.reception, 0.f, 1.f);
         dial_[0] = dial_[1] = tune;
         for (int k = 0; k < kEffectCount; k++) level_[k] = (params.effects >> k) & 1u ? 1.f : 0.f;
+        burst_level_ = level_[kFeedbackBurst];
+        squelch_level_ = level_[kSquelch];
     }
     // Pad effects: each fades in and out over ~30 ms
     const uint32_t fx = params.effects;
@@ -126,10 +131,10 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
         level_[k] += block_glide_ * (target - level_[k]);
         if (fabsf(target - level_[k]) < 1e-4f) level_[k] = target;
     }
-    // The parameter effects (ring, carrier and mix are glided per sample below, the filter per block)
-    feedback += level_[kFeedbackBurst] * (0.95f - feedback);
+    // The parameter effects (ring, carrier and mix are glided per sample below, the filter per
+    // block; the feedback burst is ramped across the block below)
     if (Has(fx, kRing100)) ring = 1.f;
-    if (Has(fx, kCarrierX2)) carrier *= 2.f;
+    if (Has(fx, kCarrierX2)) carrier *= 2.f; // up to 10 kHz (aliasing at the top is part of the effect)
     if (Has(fx, kKillDry)) mix = 1.f;
     float q_target = Clamp(params.filter_q, 0.7f, 12.f), open_target = Clamp(params.filter_open, 0.f, 1.f);
     if (Has(fx, kFilterSlam)) {
@@ -158,15 +163,23 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
         static_[c].Update(static_level);
         agc_[c].Update(r);
     }
-    // Signal fade-out: towards -40 dB over 1.5 s while on, back at the same rate
+    // Signal fade-out: towards -40 dB over 1.5 s while on, back at the same rate. It fades the
+    // input (dry and wet alike, at any MIX); the static etc. stay
     float fade_step = 40.f / 1.5f * (float)size / sample_rate_;
     fade_db_ = Has(fx, kFadeOut) ? fmaxf(fade_db_ - fade_step, -40.f) : fminf(fade_db_ + fade_step, 0.f);
     float signal_gain = fade_db_ == 0.f ? 1.f : powf(10.f, 0.05f * fade_db_);
-    // Squelch: the wet signal mutes; as it opens, a short burst of noise
+    // Squelch: the wet signal mutes; as it opens, a short burst of noise into the receiver (so
+    // the radio filter shapes it like its own noise)
     const bool squelch = Has(fx, kSquelch);
-    if (squelch_was_on_ && !squelch) squelch_tail_ = 1.f;
+    if (squelch_was_on_ && !squelch) squelch_rising_ = true;
     squelch_was_on_ = squelch;
-    float wet_gain = 1.f - level_[kSquelch];
+    // The feedback burst and the squelch's mute, ramped across the block from the last one's
+    // levels (with neither on, both ramps are constant 0: the numbers are as without them)
+    const float burst_from = burst_level_, burst_to = level_[kFeedbackBurst];
+    const float squelch_from = squelch_level_, squelch_to = level_[kSquelch];
+    burst_level_ = burst_to;
+    squelch_level_ = squelch_to;
+    const float inv_size = 1.f / (float)size;
 
     // The SSB dial, once per block: TUNE through the inertia, plus the tuning hand, then
     // pulled towards multiples of the source's pitch (strength x confidence, smoothed)
@@ -189,7 +202,8 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
     // pull, so a weak (often wrong) estimate can't steer the detents while they release
     if (detent_target >= detent_amount_) detent_pitch_ = pitch_.Pitch();
     // Dial spin: the dial keeps turning, 150 Hz/s (amount 0.35) to 3000 Hz/s (amount 1),
-    // within +-2 kHz in all; after the pad is released it comes back in ~1 s. Both on: back.
+    // within +-2 kHz in all (TUNE + tuning hand + spin; the spin stops at the limit); after the
+    // pad is released it comes back in ~1 s. Both on: back. The detents act on the spun dial too.
     float amount = Clamp(params.effect_amount, 0.35f, 1.f);
     float spin_rate = 150.f + 2850.f * (amount - 0.35f) / 0.65f;
     float spin_dir = (Has(fx, kSpinUp) ? 1.f : 0.f) - (Has(fx, kSpinDown) ? 1.f : 0.f);
@@ -237,9 +251,11 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
     } else {
         // Linked: keep the two oscillators in phase (they are left at an offset after Mirror/Rotate).
         // Pulling the right one gently (<1 Hz deviation) converges in ~100 ms and is inaudible.
-        // The lock fades out as reception rises (gone above 0.05) so the sides can drift apart;
-        // it re-locks within ~100 ms once reception is back at 0.
-        float lock = 0.02f * fmaxf(1.f - r * 20.f, 0.f);
+        // The lock fades out as the drift rises (reception, or Drift to maximum: gone above 0.05)
+        // so the sides can drift apart; it re-locks within ~100 ms once the drift is back at 0.
+        // Off while Hold drift keeps a drift.
+        float lock = 0.02f * fmaxf(1.f - drift_amount * 20.f, 0.f);
+        if (hold && (drift_hz_[0] != 0.f || drift_hz_[1] != 0.f)) lock = 0.f;
         if (lock > 0.f) {
             float err = shifter_[0].Phase() - shifter_[1].Phase();
             err -= floorf(err + 0.5f); // wrapped to -0.5..0.5
@@ -262,21 +278,35 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
             side_gain_[c] += glide_ * (gain_target[c] - side_gain_[c]);
             shift[c] = shift_hz_ * side_gain_[c];
         }
+        float t = (float)(i + 1) * inv_size;
+        float burst = burst_from + t * (burst_to - burst_from);
+        float fb = feedback + burst * (0.95f - feedback);
+        float wet_gain = 1.f - (squelch_from + t * (squelch_to - squelch_from));
+        float squelch_noise = 0.f;
+        if (squelch_rising_ || squelch_tail_ > 0.f) {
+            if (squelch_rising_) {
+                squelch_tail_ += squelch_attack_;
+                if (squelch_tail_ >= 1.f) {
+                    squelch_tail_ = 1.f;
+                    squelch_rising_ = false;
+                }
+            } else {
+                squelch_tail_ *= squelch_decay_;
+                if (squelch_tail_ < 1e-4f) squelch_tail_ = 0.f;
+            }
+            squelch_noise = 0.25f * squelch_tail_;
+        }
         float y[2];
         for (int c = 0; c < 2; c++) {
             take_other_[c] += take_glide_ * (take_target[c] - take_other_[c]);
-            float dry = x[c] + take_other_[c] * x[1 - c];
+            float dry = signal_gain * (x[c] + take_other_[c] * x[1 - c]);
             float driven = drive_.Process(dry);
             float ringed = ring_[c].Process(driven, carrier_hz_, ring_amount_);
-            float shifted = signal_gain * shifter_[c].Process(ringed, shift[c] + drift_hz_[c], feedback);
+            float shifted = shifter_[c].Process(ringed, shift[c] + drift_hz_[c], fb);
             float received = fading_[c].Process(shifted) + static_[c].Process();
+            if (squelch_noise > 0.f) received += squelch_noise * squelch_noise_.Bipolar();
             float wet = wet_gain * agc_[c].Process(filter_[c].Process(received));
-            if (squelch_tail_ > 0.f) wet += 0.25f * squelch_tail_ * squelch_noise_.Bipolar();
             y[c] = dry + mix_ * (wet - dry);
-        }
-        if (squelch_tail_ > 0.f) {
-            squelch_tail_ *= squelch_decay_;
-            if (squelch_tail_ < 1e-4f) squelch_tail_ = 0.f;
         }
         float left = y[0] + swap_ * (y[1] - y[0]), right = y[1] + swap_ * (y[0] - y[1]);
         if (plate_running_) {
