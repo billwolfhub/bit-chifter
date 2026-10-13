@@ -16,6 +16,7 @@
 #include "fading.h"
 #include "drive.h"
 #include "detents.h"
+#include "pitch_tracker.h"
 #include "random.h"
 #include <algorithm>
 #include <cstdint>
@@ -1052,6 +1053,41 @@ static void TestSoftQuantize() {
     CHECK(increasing, "detents: not increasing through a sweep");
 }
 
+// Runs the tracker for `seconds` on a signal (block 48: Push per sample, Work per block)
+template <class Signal>
+static void Track(bitch::PitchTracker &t, float seconds, Signal signal) {
+    t.Init(kSampleRate);
+    int blocks = (int)(seconds * kSampleRate / 48);
+    for (int b = 0; b < blocks; b++) {
+        for (int k = 0; k < 48; k++) t.Push(signal(b * 48 + k));
+        t.Work();
+    }
+}
+
+static void TestPitchTracker() {
+    bitch::PitchTracker t;
+    Track(t, 0.5f, [](int n) { return 0.25f * sinf(2 * kPi * 100.f * n / kSampleRate); });
+    CHECK(fabsf(t.Pitch() - 100.f) < 1.f && t.Confidence() > 0.8f, "pitch: 100 Hz sine -> %.2f Hz (conf %.2f)",
+          t.Pitch(), t.Confidence());
+    Track(t, 0.5f, [](int n) { // sawtooth: harmonic-rich, like most real sources
+        float x = 150.f * n / kSampleRate;
+        return 0.25f * (2.f * (x - floorf(x)) - 1.f);
+    });
+    CHECK(fabsf(t.Pitch() - 150.f) < 2.f && t.Confidence() > 0.7f, "pitch: 150 Hz saw -> %.2f Hz (conf %.2f)",
+          t.Pitch(), t.Confidence());
+    Track(t, 0.5f, [](int n) { return 0.25f * sinf(2 * kPi * 440.f * n / kSampleRate); });
+    CHECK(fabsf(t.Pitch() - 440.f) < 8.f && t.Confidence() > 0.8f, "pitch: 440 Hz sine -> %.2f Hz (conf %.2f)",
+          t.Pitch(), t.Confidence());
+    uint32_t seed = 3;
+    Track(t, 0.5f, [&seed](int) {
+        seed = seed * 1664525u + 1013904223u;
+        return ((seed >> 8) / 8388608.f - 1.f) * 0.25f;
+    });
+    CHECK(t.Confidence() < 0.3f, "pitch: noise confidence %.2f", t.Confidence());
+    Track(t, 0.5f, [](int) { return 0.f; });
+    CHECK(t.Confidence() == 0.f, "pitch: silence confidence %.2f", t.Confidence());
+}
+
 int main() {
     TestSoftQuantize();
     TestSoftClip();
@@ -1097,6 +1133,7 @@ int main() {
     TestFadingReturnsToExact();
     TestEngineLinkedDrifts();
     TestEngineReceptionReturnsClean();
+    TestPitchTracker();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }

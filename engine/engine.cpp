@@ -4,6 +4,7 @@
 
 #include "agc.h"
 #include "fading.h"
+#include "pitch_tracker.h"
 #include "softclip.h"
 
 namespace bitch {
@@ -15,6 +16,13 @@ constexpr float Hilbert::kB[4];
 constexpr int Fading::kSize;
 constexpr int Fading::kMask;
 constexpr float Agc::kTarget;
+constexpr int PitchTracker::kDecimate;
+constexpr int PitchTracker::kWindow;
+constexpr int PitchTracker::kMinLag;
+constexpr int PitchTracker::kMaxLag;
+constexpr int PitchTracker::kFrame;
+constexpr int PitchTracker::kLagsPerWork;
+constexpr float PitchTracker::kThreshold;
 
 static const float kSilent = 0.001f;  // -60 dBFS: above this an input counts as used at once
 static const float kQuiet = 0.0005f;  // -66 dBFS: an input must stay below this for 3 s to count as unused
