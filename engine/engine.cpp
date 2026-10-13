@@ -87,6 +87,7 @@ void Engine::Reset() {
     reverb_ = 0.f;
     plate_running_ = false;
     plate_clean_ = false;
+    for (float &v : level_) v = 0.f;
 }
 
 void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *out_r, size_t size,
@@ -107,10 +108,28 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
         filter_open_ = Clamp(params.filter_open, 0.f, 1.f);
         reception_ = Clamp(params.reception, 0.f, 1.f);
         dial_[0] = dial_[1] = tune;
+        for (int k = 0; k < kEffectCount; k++) level_[k] = (params.effects >> k) & 1u ? 1.f : 0.f;
+    }
+    // Pad effects: each fades in and out over ~30 ms
+    const uint32_t fx = params.effects;
+    for (int k = 0; k < kEffectCount; k++) {
+        float target = (fx >> k) & 1u ? 1.f : 0.f;
+        level_[k] += block_glide_ * (target - level_[k]);
+        if (fabsf(target - level_[k]) < 1e-4f) level_[k] = target;
+    }
+    // The parameter effects (ring, carrier and mix are glided per sample below, the filter per block)
+    feedback += level_[kFeedbackBurst] * (0.95f - feedback);
+    if (Has(fx, kRing100)) ring = 1.f;
+    if (Has(fx, kCarrierX2)) carrier *= 2.f;
+    if (Has(fx, kKillDry)) mix = 1.f;
+    float q_target = Clamp(params.filter_q, 0.7f, 12.f), open_target = Clamp(params.filter_open, 0.f, 1.f);
+    if (Has(fx, kFilterSlam)) {
+        q_target = 12.f; // narrowest and most resonant
+        open_target = 0.f;
     }
     log2_filter_hz_ += block_glide_ * (log2f(Clamp(params.filter_hz, 150.f, 5000.f)) - log2_filter_hz_);
-    filter_q_ += block_glide_ * (Clamp(params.filter_q, 0.7f, 12.f) - filter_q_);
-    filter_open_ += block_glide_ * (Clamp(params.filter_open, 0.f, 1.f) - filter_open_);
+    filter_q_ += block_glide_ * (q_target - filter_q_);
+    filter_open_ += block_glide_ * (open_target - filter_open_);
     float filter_hz = exp2f(log2_filter_hz_);
     for (RadioFilter &f : filter_) f.Set(filter_hz, filter_q_, filter_open_);
 

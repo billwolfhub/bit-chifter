@@ -13,6 +13,7 @@
 #include "detents.h"
 #include "pitch_tracker.h"
 #include "plate_reverb.h"
+#include "effects.h"
 
 namespace bitch {
 
@@ -34,6 +35,8 @@ struct Params {
     float detent = 0.f;          // harmonic detent strength 0-0.95 (0 = off; the firmware uses 0.7)
     float dial_inertia_s = 0.f;  // TUNE inertia, per stage of two (0 = off; the firmware uses 0.06)
     float reverb = 0.f;          // plate reverb 0-1: return level (up to -6 dB) and decay (0 = off)
+    uint32_t effects = 0;        // pad effects: bit i = Effect i (effects.h); 0 = none
+    float effect_amount = 0.35f; // how strong, 0.35-1 (the front end passes EffectAmount(reception))
 };
 
 // The sound engine: no hardware code, so it runs on the Daisy and on the Mac.
@@ -47,6 +50,7 @@ struct Params {
 // The shift (TUNE) goes through optional inertia, the tuning hand (reception x ±150 Hz) and the
 // harmonic detents (pulled onto multiples of the tracked pitch) once per block.
 // A light stereo plate reverb (Params::reverb) is added after the dry/wet mix, before the soft clip.
+// Pad effects (Params::effects, see effects.h) each fade in and out over ~30 ms; with none on, the sound is unchanged.
 class Engine {
   public:
     // block_size: the size every Process() call will use (the firmware and sim use 48).
@@ -105,6 +109,8 @@ class Engine {
     float reverb_ = 0.f;          // glided towards params.reverb
     bool plate_running_ = false;  // false: the plate is idle (and cleared in steps before it starts again)
     bool plate_clean_ = true;     // the idle plate's buffers are all zero (it may start)
+    // Pad effects: each one's level 0-1, faded per block (~30 ms)
+    float level_[kEffectCount] = {};
 };
 
 } // namespace bitch

@@ -1683,6 +1683,156 @@ static void TestLowBlip() {
     CHECK(Magnitude(beep, 1500.f) > 5 * Magnitude(beep, 500.f), "normal blip after a low one: not 1500 Hz");
 }
 
+static float Sine(float hz, float amplitude, int n) { return amplitude * sinf(2 * kPi * hz * (float)n / kSampleRate); }
+
+// Runs an engine for `seconds` on a signal (of the running sample count n) into both
+// inputs, appending both outputs
+template <class Signal>
+static void RunFor(bitch::Engine &e, const bitch::Params &p, float seconds, Signal signal, int &n,
+                   std::vector<float> &l, std::vector<float> &r) {
+    float in[48], ol[48], orr[48];
+    for (int b = 0; b < (int)(seconds * kSampleRate / 48); b++) {
+        for (int k = 0; k < 48; k++) in[k] = signal(n + k);
+        e.Process(in, in, ol, orr, 48, p);
+        l.insert(l.end(), ol, ol + 48);
+        r.insert(r.end(), orr, orr + 48);
+        n += 48;
+    }
+}
+
+static float Rms(const std::vector<float> &x) { return x.empty() ? 0.f : sqrtf((float)(Energy(x) / x.size())); }
+
+// The effects built in this step
+static const uint32_t kBuiltEffects =
+    bitch::Bit(bitch::kFeedbackBurst) | bitch::Bit(bitch::kSpinUp) | bitch::Bit(bitch::kSpinDown) |
+    bitch::Bit(bitch::kStaticBurst) | bitch::Bit(bitch::kSquelch) | bitch::Bit(bitch::kFadeOut) |
+    bitch::Bit(bitch::kFilterSlam) | bitch::Bit(bitch::kDriftMax) | bitch::Bit(bitch::kRing100) |
+    bitch::Bit(bitch::kCarrierX2) | bitch::Bit(bitch::kKillDry) | bitch::Bit(bitch::kHoldDrift);
+
+// Pads whose effects come in later steps change nothing (bit for bit)
+static void TestEffectsUnbuiltDoNothing() {
+    bitch::Params p;
+    p.tune_hz = 120.f;
+    p.feedback = 0.5f;
+    p.reception = 0.5f;
+    p.ring = 0.3f;
+    p.mix = 0.7f;
+    uint32_t seed = 3;
+    auto signal = [&seed](int n) {
+        seed = seed * 1664525u + 1013904223u;
+        return Sine(330.f, 0.2f, n) + ((seed >> 8) / 8388608.f - 1.f) * 0.05f;
+    };
+    bitch::Engine a, b;
+    a.Init(kSampleRate);
+    b.Init(kSampleRate);
+    std::vector<float> al, ar, bl, br;
+    int n = 0;
+    seed = 3;
+    RunFor(a, p, 2.f, signal, n, al, ar);
+    p.effects = ((1u << bitch::kEffectCount) - 1) & ~kBuiltEffects;
+    n = 0;
+    seed = 3;
+    RunFor(b, p, 2.f, signal, n, bl, br);
+    CHECK(al == bl && ar == br, "unbuilt effects changed the sound");
+}
+
+static void TestEffectFeedbackBurst() {
+    float tail[2];
+    for (int on = 0; on < 2; on++) {
+        bitch::Engine e;
+        e.Init(kSampleRate);
+        bitch::Params p;
+        p.tune_hz = 100.f;
+        p.effects = on ? bitch::Bit(bitch::kFeedbackBurst) : 0u;
+        std::vector<float> l, r;
+        int n = 0;
+        RunFor(e, p, 0.5f, [](int k) { return Sine(440.f, 0.3f, k); }, n, l, r);
+        RunFor(e, p, 0.5f, [](int) { return 0.f; }, n, l, r);
+        tail[on] = Rms(Window(l, 0.55f, 0.6f)); // (the wet path rings down for ~100 ms even without feedback)
+    }
+    CHECK(tail[1] > 30 * tail[0], "feedback burst: tail %g, without it %g", tail[1], tail[0]);
+}
+
+static void TestEffectRingAndCarrier() {
+    auto run = [](uint32_t effects, float ring, float carrier) {
+        bitch::Engine e;
+        e.Init(kSampleRate);
+        bitch::Params p;
+        p.ring = ring;
+        p.carrier_hz = carrier;
+        p.effects = effects;
+        std::vector<float> l, r;
+        int n = 0;
+        RunFor(e, p, 1.f, [](int k) { return Sine(1000.f, 0.25f, k); }, n, l, r);
+        return Window(l, 0.5f, 1.f);
+    };
+    auto w = run(bitch::Bit(bitch::kRing100), 0.f, 300.f);
+    CHECK(Magnitude(w, 1300.f) > 10 * Magnitude(w, 1000.f), "ring 100%%: 1300 Hz %.4f vs 1000 Hz %.4f",
+          Magnitude(w, 1300.f), Magnitude(w, 1000.f));
+    w = run(0u, 0.f, 300.f);
+    CHECK(Magnitude(w, 1000.f) > 10 * Magnitude(w, 1300.f), "ring off: not the plain tone");
+    w = run(bitch::Bit(bitch::kCarrierX2), 1.f, 300.f);
+    CHECK(Magnitude(w, 1600.f) > 10 * Magnitude(w, 1300.f), "carrier x2: 1600 Hz %.4f vs 1300 Hz %.4f",
+          Magnitude(w, 1600.f), Magnitude(w, 1300.f));
+}
+
+static void TestEffectKillDry() {
+    for (int on = 0; on < 2; on++) {
+        bitch::Engine e;
+        e.Init(kSampleRate);
+        bitch::Params p;
+        p.tune_hz = 200.f;
+        p.mix = 0.f;
+        p.effects = on ? bitch::Bit(bitch::kKillDry) : 0u;
+        std::vector<float> l, r;
+        int n = 0;
+        RunFor(e, p, 1.f, [](int k) { return Sine(1000.f, 0.25f, k); }, n, l, r);
+        auto w = Window(l, 0.5f, 1.f);
+        if (on) CHECK(Magnitude(w, 1200.f) > 10 * Magnitude(w, 1000.f), "kill dry: dry still there");
+        else CHECK(Magnitude(w, 1000.f) > 10 * Magnitude(w, 1200.f), "mix 0: not dry");
+    }
+}
+
+static void TestEffectFilterSlam() {
+    for (int on = 0; on < 2; on++) {
+        bitch::Engine e;
+        e.Init(kSampleRate);
+        bitch::Params p;
+        p.filter_hz = 1000.f;
+        p.filter_open = 1.f;
+        p.effects = on ? bitch::Bit(bitch::kFilterSlam) : 0u;
+        std::vector<float> l, r;
+        int n = 0;
+        RunFor(e, p, 1.f, [](int k) { return Sine(1000.f, 0.2f, k) + Sine(4000.f, 0.2f, k); }, n, l, r);
+        auto w = Window(l, 0.5f, 1.f);
+        double ratio = Db(Magnitude(w, 1000.f) / Magnitude(w, 4000.f));
+        if (on) CHECK(ratio > 20.0, "filter slam: 1 kHz only %.1f dB above 4 kHz", ratio);
+        else CHECK(fabs(ratio) < 1.0, "filter open: 1 kHz vs 4 kHz %.1f dB", ratio);
+    }
+}
+
+// Switching effects on and off doesn't click (not Squelch: its opening noise burst is meant to be abrupt)
+static void TestEffectsNoClick() {
+    bitch::Engine e;
+    e.Init(kSampleRate);
+    bitch::Params p;
+    p.mix = 0.5f;
+    p.carrier_hz = 300.f;
+    const uint32_t kToggled[4] = {bitch::Bit(bitch::kFadeOut), bitch::Bit(bitch::kKillDry),
+                                  bitch::Bit(bitch::kRing100), bitch::Bit(bitch::kCarrierX2)};
+    std::vector<float> l, r;
+    int n = 0;
+    uint32_t seed = 17;
+    for (int i = 0; i < 60; i++) {
+        seed = seed * 1664525u + 1013904223u;
+        p.effects ^= kToggled[(seed >> 16) % 4];
+        RunFor(e, p, 0.05f, [](int k) { return Sine(200.f, 0.3f, k); }, n, l, r);
+    }
+    float step = 0.f;
+    for (size_t k = 1; k < l.size(); k++) step = std::max(step, fabsf(l[k] - l[k - 1]));
+    CHECK(step < 0.06f, "effects on/off: a step of %.3f between samples", step);
+}
+
 int main() {
     TestSoftQuantize();
     TestSoftClip();
@@ -1751,6 +1901,12 @@ int main() {
     TestEffectsMapping();
     TestPadPages();
     TestLowBlip();
+    TestEffectsUnbuiltDoNothing();
+    TestEffectFeedbackBurst();
+    TestEffectRingAndCarrier();
+    TestEffectKillDry();
+    TestEffectFilterSlam();
+    TestEffectsNoClick();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }
