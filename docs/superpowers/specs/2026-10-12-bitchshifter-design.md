@@ -27,46 +27,25 @@ envelope follower). Local project only (`~/local_files/daisy/bit-chifter`).
 ### Faders
 | Fader | Control |
 |---|---|
-| **1 TUNE** | The SSB **dial**: −2000 … **0 at centre** … +2000 Hz. The middle 80% of the travel is a fine, linear ±400 Hz (the musical zone, where mistuned sideband sweeps through its "overtone" snaps); the last 10% at each end accelerates to ±2 kHz for big swoops. The dial follows the fader with **inertia** (~0.25 s, soft start and stop), so moves become smooth sweeps. **Harmonic detents** gently pull the shift onto multiples of the source's pitch. A recalled station replaces it until the fader moves; keyboard offsets add to it. |
-| **2 RECEPTION** | Macro, clear → lost in the noise: static and crackle level, fading depth, drift amount, AGC strength and drive all rise together, and the **tuning hand** wanders the dial around the TUNE setting (shared by both sides, up to ±150 Hz). At the bottom the receiver effects are off. |
+| **1 TUNE** | The SSB **dial**: −2000 … **0 at centre** … +2000 Hz. The middle 80% of the travel is a fine, linear ±400 Hz (the musical zone, where mistuned sideband sweeps through its "overtone" snaps); the last 10% at each end accelerates to ±2 kHz for big swoops. The dial follows the fader with **inertia** (~0.25 s, soft start and stop), so moves become smooth sweeps. **Harmonic detents** gently pull the shift onto multiples of the source's pitch. Pad effects (spins, chirp, warble, spiral) add to it. |
+| **2 RECEPTION** | Macro, clear → lost in the noise: static and crackle level, fading depth, drift amount, AGC strength and drive all rise together, and the **tuning hand** wanders the dial around the TUNE setting (shared by both sides, up to ±150 Hz). At the bottom the receiver effects are off. It also sets the **amount of the pad effects** (see the strange pages spec). |
 
 ### Knobs
 | Knob | Control |
 |---|---|
 | **1 RING** | Ring-mod amount, 0–100% (crossfade from unmodulated to fully ring-modulated) |
-| **2 CARRIER** | Ring-mod carrier, 0.1 Hz – 5 kHz (exponential). In Keyboard mode: transpose ±12 semitones. |
+| **2 CARRIER** | Ring-mod carrier, 0.1 Hz – 5 kHz (exponential). |
 | **3 FILTER** | Radio filter centre, 150 Hz – 5 kHz (exponential) |
 | **4 WIDTH** | Radio filter width: very narrow and resonant ("whistly") → wide open |
 | **5 FEEDBACK** | Shifter feedback, 0 – 95% (barberpole sweeps) |
 | **6 MIX** | Dry/wet, 0–100% |
 
-### Switch 1: pad mode
-| Position | Pads |
-|---|---|
-| **Stations** | 12 stored tunings (see Stations in detail). Touch = glide ("dial swoop") from the current tuning to the station. Hold a pad ≥ 2 s = store (saved to QSPI). |
-| **Keyboard** | Chromatic octave, pad 1–12 = C…B, playing the ring-mod carrier (base set by knob 2 transpose; middle octave C3 = 130.8 Hz). The shift also follows the note when knob 1 RING is at 0 (musical, pitch-shift-like use). **Hold:** touching a pad for ≥ 1 s latches it; the note keeps sounding until another pad is touched. |
-| **Performance** | Momentary (or latched, see switch 2) effects — initial set, refined at step 6: 1 feedback burst (95%), 2 static burst, 3 filter slam (narrowest, max resonance), 4 signal fades out, 5 drift to maximum, 6 ring mod 100%, 7 squelch (wet muted), 8 dial spins up, 9 dial spins down, 10 hold drift (freeze the wander), 11 carrier ×2, 12 kill dry. |
-
-### Stations in detail
-- **What a station holds:** the TUNE shift, filter centre, filter width, carrier and ring
-  amount (absolute values, not offsets).
-- **Storing:** hold a pad ≥ 2 s. It stores the settings the knobs and faders were at
-  **when the pad was first touched**, not the half-glided sound that plays while holding.
-  In practice: set the controls, then hold the pad.
-- **Recall and takeover:** a tap glides to the station, and its values replace the
-  controls'. Each knob or fader takes its parameter back as soon as it is moved (more
-  than ~2% from where it was at the recall), jumping from the station's value to the
-  control's position. Untouched controls keep the station's values. No pickup: without
-  a screen, an immediate takeover is easier to follow.
-- **Confirmation:** a successful store plays a short audible chirp (a quick rising dial
-  sweep, mixed into the output) and blinks the Seed's LED (if visible on the board).
-
-### Switch 2: modifier (depends on switch 1)
-| Mode | Left | Middle | Right |
-|---|---|---|---|
-| Keyboard | Octave down | Normal | Octave up |
-| Stations | Snap (≈ 50 ms glide) | Swoop (≈ 600 ms) | Slow drift (≈ 3 s) |
-| Performance | Momentary | Momentary | Latch (tap on / tap off) |
+### Switches and pads
+Designed in `2026-10-13-bit-chifter-strange-pages-design.md`: switch 1 picks one of three
+pages of 10 pad effects (Shift & time, Radio, Digital & damage; tap latches, hold is
+momentary), switch 2 is the capture mode (Normal / Freeze / Loop), holding TOU clears all
+effects. The earlier Stations / Keyboard / Performance design is deferred (it is in git
+history, before 2026-10-13's strange pages commit).
 
 ## Signal chain (per sample, 48 kHz, block 48)
 
@@ -103,8 +82,8 @@ in doesn't click). **Movement between the sides** comes from:
      delayed one sample and Q is the B chain (sign verified by the shift tests).
    - **Feedback:** output → 2 ms delay → `tanh` soft clip → × knob 5 → added to the
      shifter input. The delay keeps the loop stable and gives the barberpole its smear.
-   - Shift = (TUNE through the dial inertia, or the recalled station's shift) + keyboard offset +
-     tuning hand → **harmonic detents** → per-side stereo gain + drift, glided.
+   - Shift = TUNE through the dial inertia + tuning hand (+ the pad effects' chirp, warble,
+     spin and spiral, see the strange pages spec) → **harmonic detents** → per-side stereo gain + drift, glided.
    - **Harmonic detents:** a pitch tracker (YIN on the input downsampled to 8 kHz, 60–800 Hz,
      spread across blocks so there are no CPU spikes) reports the source's fundamental f0 and a
      confidence. The shift goes through a soft-quantise curve,
@@ -132,19 +111,19 @@ in doesn't click). **Movement between the sides** comes from:
 bit-chifter/
   engine/            sound only, no hardware code; one file per stage
     drive.h  ring_mod.h  hilbert.h  shifter.h  radio_filter.h  reception.h  engine.h/.cpp
-  simple_touch.cpp   Simple Touch front end: knobs, faders, switches, pads, pad modes,
-                     stations storage → engine parameters; audio callback
+  simple_touch.cpp   Simple Touch front end: knobs, faders, switches, pads (via ui/pad_pages.h)
+                     → engine parameters; audio callback
   sim/               Mac harness: runs the engine on a WAV or test tones, writes a WAV
   hwtest/            step 1 hardware test firmware
   Makefile           libDaisy/DaisySP one level up, APP_TYPE = BOOT_SRAM
 ```
 
 - `Engine` takes a block of audio and a `Params` struct (tune, reception, ring, carrier,
-  filter, width, feedback, mix, plus pad/station overrides) and returns processed L/R.
+  filter, width, feedback, mix, plus the pad effects bits, effect amount and capture mode) and returns processed L/R.
   Each stage is a small class with `Init(sample_rate)` and `Process(...)`.
 - A later `patch.cpp` front end (knobs + CV + screen) reuses the engine unchanged.
-- Stations are saved to QSPI at **0x7C0000** (Plooper 0x7D0000, Edges 0x7E0000,
-  Grainwaves 0x7F0000), with a version number so format changes don't load garbage.
+- If stations come back, they are saved to QSPI at **0x7C0000** (Plooper 0x7D0000, Edges
+  0x7E0000, Grainwaves 0x7F0000), with a version number so format changes don't load garbage.
 
 ## Safety
 
@@ -171,10 +150,10 @@ bit-chifter/
 3. **Shifter on the Simple Touch:** TUNE fader and feedback knob only.
 4. **Ring mod and radio filter.**
 5. **Reception:** drift, fading, static, AGC.
-6. **Pads and switches:** stations (with QSPI storage), keyboard, performance.
+6. **Pads and switches:** the strange pages (see their spec for their own build order).
 7. **Later, optional:** reverb; the Daisy Patch front end.
 
 ## Out of scope (for now)
 
-MIDI, CV, a screen UI, presets beyond the 12 stations, reverb. The external carrier input mode
+MIDI, CV, a screen UI, stations and keyboard (deferred), reverb. The external carrier input mode
 (CH pad) is planned but not yet designed in detail.
