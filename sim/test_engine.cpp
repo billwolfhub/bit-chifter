@@ -7,6 +7,7 @@
 #include "hilbert.h"
 #include "softclip.h"
 #include "shifter.h"
+#include "ring_mod.h"
 #include <algorithm>
 #include <cstdint>
 
@@ -235,6 +236,33 @@ static void TestSoftClip() {
     CHECK(std::isnan(bitch::SoftClip(NAN)), "softclip: NaN must pass through");
 }
 
+// Ring-modulates a 1 kHz sine (amplitude 0.25); returns the last 0.5 s
+static std::vector<float> RingSine(float carrier_hz, float amount) {
+    bitch::RingMod r;
+    r.Init(kSampleRate);
+    std::vector<float> out;
+    int n = (int)kSampleRate;
+    for (int t = 0; t < n; t++) {
+        float x = 0.25f * sinf(2 * kPi * 1000.f * t / kSampleRate);
+        float y = r.Process(x, carrier_hz, amount);
+        if (t >= n / 2) out.push_back(y);
+    }
+    return out;
+}
+
+static void TestRingMod() {
+    auto full = RingSine(100.f, 1.f);
+    CHECK(fabs(Magnitude(full, 900.f) - 0.125) < 0.01, "ring 1: 900 Hz %.3f", Magnitude(full, 900.f));
+    CHECK(fabs(Magnitude(full, 1100.f) - 0.125) < 0.01, "ring 1: 1100 Hz %.3f", Magnitude(full, 1100.f));
+    CHECK(Magnitude(full, 1000.f) < 0.005, "ring 1: original left %.4f", Magnitude(full, 1000.f));
+    auto none = RingSine(100.f, 0.f);
+    CHECK(fabs(Magnitude(none, 1000.f) - 0.25) < 0.005, "ring 0: 1000 Hz %.3f", Magnitude(none, 1000.f));
+    CHECK(Magnitude(none, 1100.f) < 0.005, "ring 0: sideband %.4f", Magnitude(none, 1100.f));
+    auto half = RingSine(100.f, 0.5f);
+    CHECK(fabs(Magnitude(half, 1000.f) - 0.125) < 0.01, "ring 0.5: 1000 Hz %.3f", Magnitude(half, 1000.f));
+    CHECK(fabs(Magnitude(half, 1100.f) - 0.0625) < 0.01, "ring 0.5: 1100 Hz %.3f", Magnitude(half, 1100.f));
+}
+
 int main() {
     TestSoftClip();
     TestHilbertQuadrature();
@@ -247,6 +275,7 @@ int main() {
     TestEngineNonFiniteMidBlock();
     TestEngineNaNTune();
     TestEngineMonoSum();
+    TestRingMod();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }
