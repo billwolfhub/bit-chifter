@@ -4,7 +4,7 @@ A frequency shifter and ring modulator for the Synthux Simple Touch, voiced as a
 **shortwave sideband receiver**: voices sliding into "Donald Duck" pitch as the dial
 is mistuned, heterodyne whistles, a narrow boxy band, drifting, fading and static.
 Weird first; a clean, tuned shift is a bonus. It usually feeds other effects (e.g.
-Weave), so it has no reverb or delay of its own (reverb may be added last).
+Weave), so it has only a light reverb (on the MIX knob's top end) and no delay of its own.
 
 Inspired by the Doepfer A-126-2 (analog frequency shifter, up/down mix, squelch) and
 FreakShift (Reason RE: drive → ring mod → frequency shifter, feedback, width, LFO,
@@ -38,7 +38,7 @@ envelope follower). Local project only (`~/local_files/daisy/bit-chifter`).
 | **3 FILTER** | Radio filter centre, 150 Hz – 5 kHz (exponential) |
 | **4 WIDTH** | Radio filter width: very narrow and resonant ("whistly") → wide open |
 | **5 FEEDBACK** | Shifter feedback, 0 – 95% (barberpole sweeps) |
-| **6 MIX** | Dry/wet, 0–100% |
+| **6 MIX** | Dry/wet: 0–100% over the first 85% of the turn; the last 15% stays fully wet and adds the **reverb**, from none to its full (light) amount |
 
 ### Switches and pads
 Designed in `2026-10-13-bit-chifter-strange-pages-design.md`: switch 1 picks one of three
@@ -103,7 +103,15 @@ in doesn't click). **Movement between the sides** comes from:
      target level, max boost +18 dB × RECEPTION. Quiet passages let the static swell; it
      also keeps the level steady for downstream effects.
 6. **Mix** with the dry (mono-summed) input, knob 6.
-7. **Soft limiter** on the outputs.
+7. **Reverb:** a small stereo plate (Dattorro style, our own code, MIT): input band-limited
+   (~150 Hz – 8 kHz), predelay ~10 ms, four input allpasses for diffusion, then two
+   cross-coupled loops (modulated allpass + delay + damping low-pass) with stereo taps.
+   Fed by the mixed output (so dry, Freeze and Loop are reverberated too). Its amount
+   comes from the top 15% of MIX: the reverb return rises from 0 to −6 dB (relative to the
+   signal), and the decay lengthens with it, ~1.2 s → ~3 s. Exact pass-through at amount 0
+   (the reverb's state is still cleared, so turning it up never replays old sound).
+   Buffers (~60 KB) in SRAM or SDRAM; CPU budget ~3–6%.
+8. **Soft limiter** on the outputs.
 
 ## Code structure
 
@@ -151,9 +159,10 @@ bit-chifter/
 4. **Ring mod and radio filter.**
 5. **Reception:** drift, fading, static, AGC.
 6. **Pads and switches:** the strange pages (see their spec for their own build order).
-7. **Later, optional:** reverb; the Daisy Patch front end.
+7. **Reverb** (one small plan, before the strange pages' step 1).
+8. **Later, optional:** the Daisy Patch front end.
 
 ## Out of scope (for now)
 
-MIDI, CV, a screen UI, stations and keyboard (deferred), reverb. The external carrier input mode
+MIDI, CV, a screen UI, stations and keyboard (deferred). The external carrier input mode
 (CH pad) is planned but not yet designed in detail.

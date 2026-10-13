@@ -201,5 +201,6 @@ At the input, before Drive, so the whole chain (dry included) processes the capt
 
 ## Out of scope (for now)
 
-Stations and Keyboard (deferred); the CH pad's modes; per-effect amount controls; reverb;
-the Daisy Patch front end.
+Stations and Keyboard (deferred); the CH pad's modes; per-effect amount controls; the
+Daisy Patch front end. (The light reverb is in the main spec, on the MIX knob's top end,
+built before step 1 here.)
