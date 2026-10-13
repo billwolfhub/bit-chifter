@@ -42,6 +42,13 @@ inline void FilterWidth(float knob, float &q, float &open) {
     open = fminf(fmaxf((knob - 0.85f) / 0.12f, 0.f), 1.f); // fully open from 97% of the turn (a knob rarely reads exactly 1.0)
 }
 
+// Knob -> dry/wet and reverb: dry/wet 0-1 over the first 85% of the turn; the rest stays
+// fully wet and brings in the reverb, full from 97% of the turn (a knob rarely reads exactly 1.0)
+inline void MixAndReverb(float knob, float &mix, float &reverb) {
+    mix = fminf(fmaxf(knob / 0.85f, 0.f), 1.f);
+    reverb = fminf(fmaxf((knob - 0.85f) / 0.12f, 0.f), 1.f);
+}
+
 // Fader -> reception amount 0-1, with the bottom 3% truly clean and the top 3% full
 // (a fader rarely reads exactly 0 or 1)
 inline float ReceptionAmount(float fader) { return fminf(fmaxf((fader - 0.03f) / 0.94f, 0.f), 1.f); }

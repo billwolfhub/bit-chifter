@@ -1274,6 +1274,22 @@ static void TestEngineTuningHand() {
     CHECK(hi - lo > 80.f, "tuning hand: only wandered %.1f Hz", hi - lo);
 }
 
+static void TestMixAndReverb() {
+    float mix, reverb;
+    bitch::MixAndReverb(0.f, mix, reverb);
+    CHECK(mix == 0.f && reverb == 0.f, "mix knob 0: mix %.3f reverb %.3f", mix, reverb);
+    bitch::MixAndReverb(0.425f, mix, reverb);
+    CHECK(fabsf(mix - 0.5f) < 1e-4f && reverb == 0.f, "mix knob 42.5%%: mix %.3f reverb %.3f", mix, reverb);
+    bitch::MixAndReverb(0.85f, mix, reverb);
+    CHECK(mix == 1.f && reverb == 0.f, "mix knob 85%%: mix %.3f reverb %.3f", mix, reverb);
+    bitch::MixAndReverb(0.91f, mix, reverb);
+    CHECK(mix == 1.f && fabsf(reverb - 0.5f) < 1e-3f, "mix knob 91%%: mix %.3f reverb %.3f", mix, reverb);
+    bitch::MixAndReverb(0.97f, mix, reverb);
+    CHECK(mix == 1.f && reverb == 1.f, "mix knob 97%%: mix %.3f reverb %.3f", mix, reverb);
+    bitch::MixAndReverb(1.f, mix, reverb);
+    CHECK(mix == 1.f && reverb == 1.f, "mix knob 100%%: mix %.3f reverb %.3f", mix, reverb);
+}
+
 int main() {
     TestSoftQuantize();
     TestSoftClip();
@@ -1329,6 +1345,7 @@ int main() {
     TestEngineDetentsHoldPitch();
     TestEngineMirrorDetents();
     TestEngineTuningHand();
+    TestMixAndReverb();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }
