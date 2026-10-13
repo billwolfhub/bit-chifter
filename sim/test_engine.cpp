@@ -7,6 +7,7 @@
 #include "hilbert.h"
 #include "softclip.h"
 #include "shifter.h"
+#include "mapping.h"
 #include "radio_filter.h"
 #include "ring_mod.h"
 #include <algorithm>
@@ -336,6 +337,27 @@ static void TestRadioFilterSweepStable() {
     CHECK(peak < 8.f, "filter sweep: peak %.2f", peak);
 }
 
+static void TestMappings() {
+    CHECK(bitch::TuneHz(0.5f) == 0.f, "tune centre %.2f", bitch::TuneHz(0.5f));
+    CHECK(bitch::TuneHz(0.51f) == 0.f, "tune dead zone %.2f", bitch::TuneHz(0.51f));
+    CHECK(fabsf(bitch::TuneHz(1.f) - 2500.f) < 0.5f, "tune top %.1f", bitch::TuneHz(1.f));
+    CHECK(fabsf(bitch::TuneHz(0.f) + 2500.f) < 0.5f, "tune bottom %.1f", bitch::TuneHz(0.f));
+    CHECK(bitch::TuneHz(0.6f) > 0.f && bitch::TuneHz(0.6f) < 30.f, "tune fine near centre %.2f", bitch::TuneHz(0.6f));
+    CHECK(fabsf(bitch::CarrierHz(0.f) - 0.1f) < 0.001f, "carrier bottom %.3f", bitch::CarrierHz(0.f));
+    CHECK(fabsf(bitch::CarrierHz(1.f) - 5000.f) < 1.f, "carrier top %.1f", bitch::CarrierHz(1.f));
+    CHECK(fabsf(bitch::FilterHz(0.f) - 150.f) < 0.1f, "filter bottom %.1f", bitch::FilterHz(0.f));
+    CHECK(fabsf(bitch::FilterHz(1.f) - 5000.f) < 1.f, "filter top %.1f", bitch::FilterHz(1.f));
+    float q, open;
+    bitch::FilterWidth(0.f, q, open);
+    CHECK(fabsf(q - 12.f) < 0.01f && open == 0.f, "width 0: q %.2f open %.2f", q, open);
+    bitch::FilterWidth(0.85f, q, open);
+    CHECK(fabsf(q - 0.7f) < 0.01f && open == 0.f, "width 0.85: q %.2f open %.2f", q, open);
+    bitch::FilterWidth(1.f, q, open);
+    CHECK(fabsf(q - 0.7f) < 0.01f && open == 1.f, "width 1: q %.2f open %.2f", q, open);
+    bitch::FilterWidth(0.98f, q, open);
+    CHECK(open == 1.f, "width 0.98: open %.2f", open);
+}
+
 int main() {
     TestSoftClip();
     TestHilbertQuadrature();
@@ -351,6 +373,7 @@ int main() {
     TestRingMod();
     TestRadioFilter();
     TestRadioFilterSweepStable();
+    TestMappings();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }
