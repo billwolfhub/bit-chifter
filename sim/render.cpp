@@ -1,7 +1,7 @@
 // Renders a 16-bit WAV through the bit-chifter engine.
 // Usage: render in.wav out.wav [tune=Hz] [fb=0-0.95] [mix=0-1] [ring=0-1] [carrier=Hz]
 //                              [filter=Hz] [q=0.7-12] [open=0-1] [reception=0-1]
-//                              [detent=0-0.95] [inertia=s] [sweep=Hz] [stereo=linked|mirror|rotate]
+//                              [detent=0-0.95] [inertia=s] [reverb=0-1] [sweep=Hz] [stereo=linked|mirror|rotate]
 // sweep=Hz ramps the tune linearly from tune= (at the start) to sweep= (at the end of the file).
 // (defaults are the engine's: no shift, no ring mod, filter open, linked)
 #include <cmath>
@@ -31,7 +31,8 @@ static bool SetOption(bitch::Params &p, float &sweep_to, const char *arg) {
                   {"ring", &p.ring},        {"carrier", &p.carrier_hz}, {"filter", &p.filter_hz},
                   {"q", &p.filter_q},       {"open", &p.filter_open},
                   {"reception", &p.reception}, {"detent", &p.detent},
-                  {"inertia", &p.dial_inertia_s}, {"sweep", &sweep_to}};
+                  {"inertia", &p.dial_inertia_s}, {"reverb", &p.reverb},
+                  {"sweep", &sweep_to}};
     for (auto &f : fields) {
         if (strlen(f.name) == n && strncmp(arg, f.name, n) == 0) {
             *f.field = (float)atof(value);
@@ -45,7 +46,7 @@ int main(int argc, char **argv) {
     if (argc < 3) {
         fprintf(stderr,
                 "Usage: %s in.wav out.wav [tune=] [fb=] [mix=] [ring=] [carrier=] [filter=] [q=] [open=] "
-                "[reception=] [detent=] [inertia=] [sweep=Hz] [stereo=linked|mirror|rotate]\n",
+                "[reception=] [detent=] [inertia=] [reverb=0-1] [sweep=Hz] [stereo=linked|mirror|rotate]\n",
                 argv[0]);
         return 1;
     }
@@ -62,8 +63,9 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Couldn't read %s (needs 16-bit PCM WAV, mono or stereo)\n", argv[1]);
         return 1;
     }
-    bitch::Engine engine;
-    engine.Init((float)in.sample_rate);
+    static bitch::PlateReverb plate; // large: keep it off the stack
+    static bitch::Engine engine;
+    engine.Init((float)in.sample_rate, 48, &plate);
     Wav out;
     out.sample_rate = in.sample_rate;
     out.left.resize(in.left.size());
@@ -80,9 +82,9 @@ int main(int argc, char **argv) {
         return 1;
     }
     static const char *modes[3] = {"linked", "mirror", "rotate"};
-    printf("Wrote %s (tune %g fb %g mix %g ring %g carrier %g filter %g q %g open %g reception %g detent %g inertia %g", argv[2],
+    printf("Wrote %s (tune %g fb %g mix %g ring %g carrier %g filter %g q %g open %g reception %g detent %g inertia %g reverb %g", argv[2],
            p.tune_hz, p.feedback, p.mix, p.ring, p.carrier_hz, p.filter_hz, p.filter_q, p.filter_open, p.reception,
-           p.detent, p.dial_inertia_s);
+           p.detent, p.dial_inertia_s, p.reverb);
     if (!std::isnan(sweep_to)) printf(" sweep %g", sweep_to);
     printf(" stereo %s)\n", modes[(int)p.stereo_mode]);
     return 0;
