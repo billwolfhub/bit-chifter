@@ -2,20 +2,28 @@
 
 #include <cstddef>
 
+#include "radio_filter.h"
+#include "ring_mod.h"
 #include "shifter.h"
 
 namespace bitch {
 
-// Everything the front end controls. Part 1 uses the shifter controls only.
+// Everything the front end controls (physical values; see mapping.h for knobs).
 struct Params {
-    float tune_hz = 0.f;  // shift, -2500 to +2500 Hz
-    float feedback = 0.f; // 0 to 0.95
-    float mix = 1.f;      // dry/wet, 0 to 1
+    float tune_hz = 0.f;      // shift, -2500 to +2500 Hz
+    float feedback = 0.f;     // 0 to 0.95
+    float mix = 1.f;          // dry/wet, 0 to 1
+    float ring = 0.f;         // ring-mod amount, 0 to 1
+    float carrier_hz = 100.f; // ring-mod carrier, 0.1 to 5000 Hz
+    float filter_hz = 1000.f; // radio filter centre, 150 to 5000 Hz
+    float filter_q = 0.7f;    // 0.7 (wide) to 12 (narrow)
+    float filter_open = 1.f;  // 1 = filter bypassed
 };
 
 // The sound engine: no hardware code, so it runs on the Daisy and on the Mac.
-// The inputs are summed to mono; L and R each have their own shifter (they will
-// drift apart once Reception is added, which is where the stereo comes from).
+// True stereo: each side has its own ring mod -> shifter (with feedback) -> radio
+// filter -> dry/wet -> soft clip, with shared controls. If one input is silent, the
+// other feeds both sides at full level.
 class Engine {
   public:
     void Init(float sample_rate);
@@ -25,9 +33,20 @@ class Engine {
   private:
     void Reset();
 
+    RingMod ring_[2];
     Shifter shifter_[2];
-    float shift_hz_ = 0.f; // glided towards params.tune_hz
-    float glide_ = 0.f;    // one-pole coefficient, ~20 ms
+    RadioFilter filter_[2];
+    float shift_hz_ = 0.f;     // glided towards params.tune_hz
+    float carrier_hz_ = 100.f; // glided towards params.carrier_hz
+    float glide_ = 0.f;        // per-sample one-pole coefficient, ~20 ms
+    float log2_filter_hz_ = 0.f, filter_q_ = 0.7f, filter_open_ = 1.f; // smoothed per block
+    float block_glide_ = 0.f;  // per-block one-pole coefficient, ~30 ms
+    float sample_rate_ = 48000.f;
+    // Mono detection: input envelopes, and how much of the other side each chain takes
+    float envelope_[2] = {0.f, 0.f};
+    float take_other_[2] = {0.f, 0.f};
+    float envelope_release_ = 0.f; // per sample, ~200 ms
+    float take_glide_ = 0.f;       // per sample, ~50 ms
 };
 
 } // namespace bitch

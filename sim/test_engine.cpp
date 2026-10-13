@@ -207,27 +207,9 @@ static void TestEngineNaNTune() {
         for (int k = 0; k < 48; k++)
             CHECK(std::isfinite(out_l[k]) && std::isfinite(out_r[k]), "NaN tune: block %d sample %d not finite", b, k);
     }
-}
-
-static void TestEngineMonoSum() {
-    bitch::Engine e;
-    e.Init(kSampleRate);
-    bitch::Params p;
-    p.tune_hz = 100.f;
-    p.mix = 1.f;
-    std::vector<float> l, r;
-    int n = (int)kSampleRate;
-    float in[48], zeros[48] = {}, out_l[48], out_r[48];
-    for (int t = 0; t < n; t += 48) {
-        for (int k = 0; k < 48; k++) in[k] = 0.25f * sinf(2 * kPi * 1000.f * (t + k) / kSampleRate);
-        e.Process(in, zeros, out_l, out_r, 48, p);
-        if (t >= n / 2) {
-            l.insert(l.end(), out_l, out_l + 48);
-            r.insert(r.end(), out_r, out_r + 48);
-        }
-    }
-    CHECK(fabs(Magnitude(l, 1100.f) - 0.125) < 0.02, "mono sum: OUT L 1100 Hz level %.4f", Magnitude(l, 1100.f));
-    CHECK(fabs(Magnitude(r, 1100.f) - 0.125) < 0.02, "mono sum: OUT R 1100 Hz level %.4f", Magnitude(r, 1100.f));
+    float last_peak = 0.f;
+    for (int k = 0; k < 48; k++) last_peak = std::max(last_peak, fabsf(out_l[k]));
+    CHECK(last_peak > 0.01f, "NaN tune: output silent (peak %.4f), clamp not working", last_peak);
 }
 
 static void TestSoftClip() {
@@ -358,6 +340,97 @@ static void TestMappings() {
     CHECK(open == 1.f, "width 0.98: open %.2f", open);
 }
 
+// Runs the engine for `seconds` on independent sines into each input (amplitude 0 =
+// silent input); fills the full OUT L / OUT R
+static void RunEngineStereo(const bitch::Params &p, float seconds, float freq_l, float amp_l, float freq_r,
+                            float amp_r, std::vector<float> &out_l, std::vector<float> &out_r) {
+    bitch::Engine e;
+    e.Init(kSampleRate);
+    const size_t block = 48;
+    std::vector<float> l(block), r(block), ol(block), orr(block);
+    out_l.clear();
+    out_r.clear();
+    int blocks = (int)(seconds * kSampleRate) / block;
+    for (int b = 0; b < blocks; b++) {
+        for (size_t k = 0; k < block; k++) {
+            float t = (b * block + k) / kSampleRate;
+            l[k] = amp_l * sinf(2 * kPi * freq_l * t);
+            r[k] = amp_r * sinf(2 * kPi * freq_r * t);
+        }
+        e.Process(l.data(), r.data(), ol.data(), orr.data(), block, p);
+        out_l.insert(out_l.end(), ol.begin(), ol.end());
+        out_r.insert(out_r.end(), orr.begin(), orr.end());
+    }
+}
+
+// Samples [from_s, to_s) of a rendered output
+static std::vector<float> Window(const std::vector<float> &x, float from_s, float to_s) {
+    return std::vector<float>(x.begin() + (size_t)(from_s * kSampleRate), x.begin() + (size_t)(to_s * kSampleRate));
+}
+
+// A mono source in one input comes out of both sides at full level
+static void TestEngineMonoInput() {
+    bitch::Params p;
+    p.tune_hz = 100.f;
+    std::vector<float> l, r;
+    RunEngineStereo(p, 1.f, 1000.f, 0.25f, 0.f, 0.f, l, r); // IN R silent
+    auto wl = Window(l, 0.5f, 1.f), wr = Window(r, 0.5f, 1.f);
+    CHECK(fabs(Magnitude(wl, 1100.f) - 0.245) < 0.02, "mono L-only: OUT L 1100 Hz %.3f", Magnitude(wl, 1100.f));
+    CHECK(fabs(Magnitude(wr, 1100.f) - 0.245) < 0.02, "mono L-only: OUT R 1100 Hz %.3f", Magnitude(wr, 1100.f));
+    RunEngineStereo(p, 1.f, 0.f, 0.f, 1000.f, 0.25f, l, r); // IN L silent
+    wl = Window(l, 0.5f, 1.f);
+    CHECK(fabs(Magnitude(wl, 1100.f) - 0.245) < 0.02, "mono R-only: OUT L 1100 Hz %.3f", Magnitude(wl, 1100.f));
+}
+
+// A real stereo source keeps its sides apart
+static void TestEngineStereoKeepsSides() {
+    bitch::Params p;
+    p.tune_hz = 100.f;
+    std::vector<float> l, r;
+    RunEngineStereo(p, 1.f, 1000.f, 0.25f, 1500.f, 0.25f, l, r);
+    auto wl = Window(l, 0.5f, 1.f), wr = Window(r, 0.5f, 1.f);
+    CHECK(Magnitude(wl, 1100.f) > 0.2, "stereo: OUT L 1100 Hz %.3f", Magnitude(wl, 1100.f));
+    CHECK(Magnitude(wl, 1600.f) < 0.01, "stereo: R leaking into L %.3f", Magnitude(wl, 1600.f));
+    CHECK(Magnitude(wr, 1600.f) > 0.2, "stereo: OUT R 1600 Hz %.3f", Magnitude(wr, 1600.f));
+    CHECK(Magnitude(wr, 1100.f) < 0.01, "stereo: L leaking into R %.3f", Magnitude(wr, 1100.f));
+}
+
+// Ring then shift: 1 kHz ring-modulated by 100 Hz gives 900 + 1100 Hz, then +50 Hz
+// shift gives 950 + 1150 Hz (proves the ring mod comes before the shifter)
+static void TestEngineRingBeforeShift() {
+    bitch::Params p;
+    p.tune_hz = 50.f;
+    p.ring = 1.f;
+    p.carrier_hz = 100.f;
+    auto out = RunEngine(p, 0.25f);
+    CHECK(Magnitude(out, 950.f) > 0.1, "ring+shift: 950 Hz %.3f", Magnitude(out, 950.f));
+    CHECK(Magnitude(out, 1150.f) > 0.1, "ring+shift: 1150 Hz %.3f", Magnitude(out, 1150.f));
+    CHECK(Magnitude(out, 1000.f) < 0.01, "ring+shift: 1000 Hz left %.3f", Magnitude(out, 1000.f));
+    CHECK(Magnitude(out, 900.f) < 0.01, "ring+shift: unshifted 900 Hz %.3f", Magnitude(out, 900.f));
+}
+
+// The radio filter is in the chain: a 1 kHz input through a 4 kHz-centred narrow
+// filter is much quieter than through a 1 kHz-centred one
+static void TestEngineFilter() {
+    bitch::Params p;
+    p.filter_q = 4.f;
+    p.filter_open = 0.f;
+    p.filter_hz = 1000.f;
+    auto on = RunEngine(p, 0.25f);
+    p.filter_hz = 4000.f;
+    auto off = RunEngine(p, 0.25f);
+    CHECK(Db(Magnitude(on, 1000.f) / Magnitude(off, 1000.f)) > 20, "engine filter: only %.1f dB",
+          Db(Magnitude(on, 1000.f) / Magnitude(off, 1000.f)));
+}
+
+// The defaults (ring 0, filter open) leave part 1's shift unchanged
+static void TestEngineDefaultsTransparent() {
+    bitch::Params p;
+    p.tune_hz = 100.f;
+    auto out = RunEngine(p, 0.25f);
+    CHECK(Magnitude(out, 1100.f) > 0.2, "defaults: 1100 Hz %.3f", Magnitude(out, 1100.f));
+}
+
 int main() {
     TestSoftClip();
     TestHilbertQuadrature();
@@ -369,7 +442,11 @@ int main() {
     TestEngineRecoversFromNaN();
     TestEngineNonFiniteMidBlock();
     TestEngineNaNTune();
-    TestEngineMonoSum();
+    TestEngineMonoInput();
+    TestEngineStereoKeepsSides();
+    TestEngineRingBeforeShift();
+    TestEngineFilter();
+    TestEngineDefaultsTransparent();
     TestRingMod();
     TestRadioFilter();
     TestRadioFilterSweepStable();
