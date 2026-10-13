@@ -44,6 +44,8 @@ void Engine::Init(float sample_rate, size_t block_size, PlateReverb *plate) {
     }
     hand_.Init(block_rate, 47u);
     pitch_.Init(sample_rate);
+    squelch_decay_ = expf(-1.f / (0.15f * sample_rate));
+    squelch_noise_.Seed(61u);
     if (plate_) plate_->Init(sample_rate);
     glide_ = 1.f - expf(-1.f / (0.02f * sample_rate));
     envelope_release_ = expf(-1.f / (0.2f * sample_rate));
@@ -88,6 +90,11 @@ void Engine::Reset() {
     plate_running_ = false;
     plate_clean_ = false;
     for (float &v : level_) v = 0.f;
+    drift_hz_[0] = drift_hz_[1] = 0.f;
+    hand_hz_ = 0.f;
+    fade_db_ = 0.f;
+    squelch_tail_ = 0.f;
+    squelch_was_on_ = false;
 }
 
 void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *out_r, size_t size,
@@ -137,13 +144,27 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
     reception_ += block_glide_ * (Clamp(params.reception, 0.f, 1.f) - reception_);
     float r = reception_ < 1e-4f ? 0.f : reception_;
     drive_.Set(r);
-    float drift_hz[2];
+    // Drift to maximum raises the drift alone; Static burst the static alone; Hold drift
+    // freezes the drift and the tuning hand where they are
+    float drift_amount = r + level_[kDriftMax] * (1.f - r);
+    float static_level = r + level_[kStaticBurst] * (1.f - r);
+    const bool hold = Has(fx, kHoldDrift);
     for (int c = 0; c < 2; c++) {
-        drift_hz[c] = r > 0.f ? r * 40.f * drift_[c].Next(0.1f + 0.4f * r) : 0.f;
+        if (!hold)
+            drift_hz_[c] = drift_amount > 0.f ? drift_amount * 40.f * drift_[c].Next(0.1f + 0.4f * drift_amount) : 0.f;
         fading_[c].Update(r);
-        static_[c].Update(r);
+        static_[c].Update(static_level);
         agc_[c].Update(r);
     }
+    // Signal fade-out: towards -40 dB over 1.5 s while on, back at the same rate
+    float fade_step = 40.f / 1.5f * (float)size / sample_rate_;
+    fade_db_ = Has(fx, kFadeOut) ? fmaxf(fade_db_ - fade_step, -40.f) : fminf(fade_db_ + fade_step, 0.f);
+    float signal_gain = fade_db_ == 0.f ? 1.f : powf(10.f, 0.05f * fade_db_);
+    // Squelch: the wet signal mutes; as it opens, a short burst of noise
+    const bool squelch = Has(fx, kSquelch);
+    if (squelch_was_on_ && !squelch) squelch_tail_ = 1.f;
+    squelch_was_on_ = squelch;
+    float wet_gain = 1.f - level_[kSquelch];
 
     // The SSB dial, once per block: TUNE through the inertia, plus the tuning hand, then
     // pulled towards multiples of the source's pitch (strength x confidence, smoothed)
@@ -156,7 +177,7 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
     } else {
         dial_[0] = dial_[1] = tune;
     }
-    float hand = r > 0.f ? r * 150.f * hand_.Next(0.15f + 0.15f * r) : 0.f;
+    if (!hold) hand_hz_ = r > 0.f ? r * 150.f * hand_.Next(0.15f + 0.15f * r) : 0.f;
     float detent_target = Clamp(params.detent, 0.f, 0.95f) * pitch_.Confidence();
     // Rises in ~30 ms, falls in ~150 ms, so one analysis without a pitch doesn't pump the detents
     float detent_glide = detent_target > detent_amount_ ? block_glide_ : detent_release_;
@@ -165,7 +186,7 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
     // The pull's pitch follows the tracker only for a pitch at least as sure as the current
     // pull, so a weak (often wrong) estimate can't steer the detents while they release
     if (detent_target >= detent_amount_) detent_pitch_ = pitch_.Pitch();
-    target_shift_ = SoftQuantize(dial + hand, detent_pitch_, detent_amount_);
+    target_shift_ = SoftQuantize(dial + hand_hz_, detent_pitch_, detent_amount_);
 
     // The plate: idle (and skipped) at 0 or without a plate. While idle it is cleared in steps
     // (1024 floats a block, ~40 ms for all of it), and it starts again only once clean, so an
@@ -230,10 +251,15 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
             float dry = x[c] + take_other_[c] * x[1 - c];
             float driven = drive_.Process(dry);
             float ringed = ring_[c].Process(driven, carrier_hz_, ring_amount_);
-            float shifted = shifter_[c].Process(ringed, shift[c] + drift_hz[c], feedback);
+            float shifted = signal_gain * shifter_[c].Process(ringed, shift[c] + drift_hz_[c], feedback);
             float received = fading_[c].Process(shifted) + static_[c].Process();
-            float wet = agc_[c].Process(filter_[c].Process(received));
+            float wet = wet_gain * agc_[c].Process(filter_[c].Process(received));
+            if (squelch_tail_ > 0.f) wet += 0.25f * squelch_tail_ * squelch_noise_.Bipolar();
             y[c] = dry + mix_ * (wet - dry);
+        }
+        if (squelch_tail_ > 0.f) {
+            squelch_tail_ *= squelch_decay_;
+            if (squelch_tail_ < 1e-4f) squelch_tail_ = 0.f;
         }
         float left = y[0] + swap_ * (y[1] - y[0]), right = y[1] + swap_ * (y[0] - y[1]);
         if (plate_running_) {

@@ -736,7 +736,8 @@ static void TestEffectSquelch() {
     CHECK(Rms(Window(l, 0.2f, 0.5f)) < 1e-3f, "squelch: wet still %g", Rms(Window(l, 0.2f, 0.5f)));
     p.effects = 0u;
     RunFor(e, p, 1.5f, tone, n, l, r);
-    double tail = Magnitude(Window(l, 0.5f, 0.6f), 3000.f), after = Magnitude(Window(l, 1.5f, 1.6f), 3000.f);
+    // (at 3.5 kHz: not a harmonic of the tone, which the soft clip adds)
+    double tail = Magnitude(Window(l, 0.5f, 0.6f), 3500.f), after = Magnitude(Window(l, 1.5f, 1.6f), 3500.f);
     CHECK(tail > 10 * after, "squelch: no noise burst as it opens (%.5f vs %.5f)", tail, after);
     CHECK(Rms(Window(l, 1.5f, 2.f)) > 0.15f, "squelch: the tone didn't come back (%g)", Rms(Window(l, 1.5f, 2.f)));
 }

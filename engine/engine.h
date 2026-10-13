@@ -111,6 +111,13 @@ class Engine {
     bool plate_clean_ = true;     // the idle plate's buffers are all zero (it may start)
     // Pad effects: each one's level 0-1, faded per block (~30 ms)
     float level_[kEffectCount] = {};
+    float drift_hz_[2] = {0.f, 0.f}; // each side's drift (kept while Hold drift is on)
+    float hand_hz_ = 0.f;            // the tuning hand (kept while Hold drift is on)
+    float fade_db_ = 0.f;            // Signal fade-out: 0 to -40 dB
+    float squelch_tail_ = 0.f;       // the noise burst as the squelch opens (1 -> 0)
+    float squelch_decay_ = 0.f;      // per sample, ~150 ms
+    bool squelch_was_on_ = false;
+    Random squelch_noise_;
 };
 
 } // namespace bitch

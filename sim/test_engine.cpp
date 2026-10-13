@@ -1833,6 +1833,94 @@ static void TestEffectsNoClick() {
     CHECK(step < 0.06f, "effects on/off: a step of %.3f between samples", step);
 }
 
+static void TestEffectStaticBurst() {
+    for (int on = 0; on < 2; on++) {
+        bitch::Engine e;
+        e.Init(kSampleRate);
+        bitch::Params p;
+        p.effects = on ? bitch::Bit(bitch::kStaticBurst) : 0u;
+        std::vector<float> l, r;
+        int n = 0;
+        RunFor(e, p, 1.f, [](int) { return 0.f; }, n, l, r);
+        float rms = Rms(Window(l, 0.5f, 1.f));
+        if (on) CHECK(rms > 0.01f, "static burst: only %g", rms);
+        else CHECK(Peak(l) < 1e-6f, "no static burst: %g", Peak(l));
+    }
+}
+
+static float Range(const std::vector<float> &x, size_t from) {
+    float lo = 1e9f, hi = -1e9f;
+    for (size_t i = from; i < x.size(); i++) {
+        lo = std::min(lo, x[i]);
+        hi = std::max(hi, x[i]);
+    }
+    return hi - lo;
+}
+
+static void TestEffectDriftMax() {
+    bitch::Params p;
+    bitch::Engine e;
+    e.Init(kSampleRate);
+    auto still = ShiftTrace(e, p, 5.f, [](int) { return 0.f; });
+    CHECK(Range(still, 100) < 0.01f, "reception 0: the shift moved %.3f Hz", Range(still, 100));
+    p.effects = bitch::Bit(bitch::kDriftMax);
+    auto drift = ShiftTrace(e, p, 10.f, [](int) { return 0.f; });
+    CHECK(Range(drift, 1000) > 20.f, "drift to maximum: only %.1f Hz", Range(drift, 1000));
+}
+
+static void TestEffectHoldDrift() {
+    bitch::Params p;
+    p.reception = 1.f;
+    bitch::Engine e;
+    e.Init(kSampleRate);
+    auto free_run = ShiftTrace(e, p, 4.f, [](int) { return 0.f; });
+    CHECK(Range(free_run, 1500) > 5.f, "reception 1: the shift only moved %.1f Hz", Range(free_run, 1500));
+    p.effects = bitch::Bit(bitch::kHoldDrift);
+    auto held = ShiftTrace(e, p, 3.f, [](int) { return 0.f; });
+    CHECK(Range(held, 500) < 1.f, "hold drift: the shift still moved %.2f Hz", Range(held, 500));
+}
+
+static void TestEffectFadeOut() {
+    auto tone = [](int k) { return Sine(1000.f, 0.25f, k); };
+    bitch::Engine ref_engine;
+    ref_engine.Init(kSampleRate);
+    bitch::Params p;
+    std::vector<float> ref_l, ref_r;
+    int n = 0;
+    RunFor(ref_engine, p, 1.f, tone, n, ref_l, ref_r);
+    double ref = Magnitude(Window(ref_l, 0.5f, 1.f), 1000.f);
+    bitch::Engine e;
+    e.Init(kSampleRate);
+    std::vector<float> l, r;
+    n = 0;
+    p.effects = bitch::Bit(bitch::kFadeOut);
+    RunFor(e, p, 2.f, tone, n, l, r);
+    double faded = Db(Magnitude(Window(l, 1.8f, 2.f), 1000.f) / ref);
+    CHECK(faded < -35.0, "fade-out: only %.1f dB down after 1.8 s", faded);
+    p.effects = 0u;
+    RunFor(e, p, 2.f, tone, n, l, r);
+    double back = Db(Magnitude(Window(l, 3.8f, 4.f), 1000.f) / ref);
+    CHECK(fabs(back) < 1.0, "fade-out: %.1f dB, 1.8 s after it ended", back);
+}
+
+static void TestEffectSquelch() {
+    auto tone = [](int k) { return Sine(1000.f, 0.25f, k); };
+    bitch::Engine e;
+    e.Init(kSampleRate);
+    bitch::Params p;
+    std::vector<float> l, r;
+    int n = 0;
+    p.effects = bitch::Bit(bitch::kSquelch);
+    RunFor(e, p, 0.5f, tone, n, l, r);
+    CHECK(Rms(Window(l, 0.2f, 0.5f)) < 1e-3f, "squelch: wet still %g", Rms(Window(l, 0.2f, 0.5f)));
+    p.effects = 0u;
+    RunFor(e, p, 1.5f, tone, n, l, r);
+    // (at 3.5 kHz: not a harmonic of the tone, which the soft clip adds)
+    double tail = Magnitude(Window(l, 0.5f, 0.6f), 3500.f), after = Magnitude(Window(l, 1.5f, 1.6f), 3500.f);
+    CHECK(tail > 10 * after, "squelch: no noise burst as it opens (%.5f vs %.5f)", tail, after);
+    CHECK(Rms(Window(l, 1.5f, 2.f)) > 0.15f, "squelch: the tone didn't come back (%g)", Rms(Window(l, 1.5f, 2.f)));
+}
+
 int main() {
     TestSoftQuantize();
     TestSoftClip();
@@ -1907,6 +1995,11 @@ int main() {
     TestEffectKillDry();
     TestEffectFilterSlam();
     TestEffectsNoClick();
+    TestEffectStaticBurst();
+    TestEffectDriftMax();
+    TestEffectHoldDrift();
+    TestEffectFadeOut();
+    TestEffectSquelch();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }
