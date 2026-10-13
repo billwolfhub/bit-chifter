@@ -50,8 +50,8 @@ pulses), and read the output with `cat /dev/cu.usbmodem*`.
 
 | Control | Does |
 |---|---|
-| Fader 1 TUNE | Shift −2500 … 0 (centre) … +2500 Hz, fine near the centre |
-| Fader 2 RECEPTION | Clean (bottom) → lost in the noise (top): the sides drift apart, the signal fades, static and crackles rise, the AGC pumps, the input is driven |
+| Fader 1 TUNE | The SSB dial: fine ±400 Hz over the middle 80%, swoop zones to ±2 kHz at the ends; glides like a heavy dial; harmonic detents catch the shift at multiples of the source's pitch |
+| Fader 2 RECEPTION | Clean (bottom) → lost in the noise (top): the sides drift apart, the signal fades, static and crackles rise, the AGC pumps, the input is driven, and the dial wanders on its own |
 | Knob 1 RING | Ring-mod amount |
 | Knob 2 CARRIER | Ring-mod carrier, 0.1 Hz (tremolo) – 5 kHz (bells) |
 | Knob 3 FILTER | Radio filter centre, 150 Hz – 5 kHz |
@@ -65,9 +65,9 @@ counts as unused after 3 s of silence). CPU about 22% (part 3).
 
 Build and flash: `make`, then RESET, BOOT while the LED pulses, `make program-dfu`.
 Over USB serial (`cat /dev/cu.usbmodem*`), once a second: CPU load, the
-control values, the stereo mode, the input/output peak levels and a blip counter. The report is
+control values, the stereo mode, the input/output peak levels, a blip counter and the tracked pitch of the input (`--` when it isn't clear). The report is
 sent without waiting (libDaisy's logger blocks the main loop when nothing reads the port).
-Mac tests: `sim/run_tests.sh`. Listen on the Mac: `sim/render.sh in.wav out.wav [tune=Hz] [fb=] [mix=] [ring=] [carrier=Hz] [filter=Hz] [q=] [open=] [stereo=linked|mirror|rotate]`.
+Mac tests: `sim/run_tests.sh`. Listen on the Mac: `sim/render.sh in.wav out.wav [tune=Hz] [fb=] [mix=] [ring=] [carrier=Hz] [filter=Hz] [q=] [open=] [reception=] [detent=] [inertia=] [sweep=Hz] [stereo=linked|mirror|rotate]`.
 `leveltest/`: input DC/peak/audio levels over USB, with a test tone or passthrough on switch 1.
 
 **Cabling note:** the outputs are stereo on one TRS jack. Into balanced interface inputs,

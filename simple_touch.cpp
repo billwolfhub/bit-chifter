@@ -1,5 +1,6 @@
 // bit-chifter for the Synthux Simple Touch: ring mod, shifter, radio filter, stereo.
-// Fader 1 TUNE (shift, 0 at the centre), fader 2 RECEPTION (clean to lost in the noise), knob 1 RING, knob 2 CARRIER, knob 3 FILTER,
+// Fader 1 TUNE (the SSB dial: fine +-400 Hz around 0 at the centre, swoop zones to +-2 kHz at the
+// ends, glides like a heavy dial, harmonic detents), fader 2 RECEPTION (clean to lost in the noise), knob 1 RING, knob 2 CARRIER, knob 3 FILTER,
 // knob 4 WIDTH, knob 5 FEEDBACK, knob 6 MIX; the "TOU" logo pad steps the stereo mode
 // (Linked / Mirror / Rotate, with 1/2/3 confirmation blips). The CPU load and the
 // controls are printed over USB serial once a second.
@@ -51,6 +52,8 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
     bitch::FilterWidth(Read(kInputWidth), p.filter_q, p.filter_open);
     p.reception = bitch::ReceptionAmount(Read(kInputReception));
     p.stereo_mode = (bitch::StereoMode)stereo_mode;
+    p.detent = 0.7f;          // harmonic detents, medium
+    p.dial_inertia_s = 0.06f; // TUNE glides like a heavy dial (two 60 ms stages)
     engine.Process(in[0], in[1], out[0], out[1], size, p);
     for (size_t i = 0; i < size; i++) {
         float b = blips.Process();
@@ -125,10 +128,14 @@ int main(void) {
         auto db = [](float v) { return v > 0.0000112f ? (int)lrintf(20.f * log10f(v)) : -99; };
         float q, open;
         bitch::FilterWidth(Read(kInputWidth), q, open);
+        // The tracked pitch of the input ("--" when there's no clear pitch)
+        char pitch[24] = "--";
+        if (engine.PitchConfidence() > 0.f)
+            snprintf(pitch, sizeof(pitch), "%d Hz %d%%", (int)engine.Pitch(), (int)(engine.PitchConfidence() * 100.f));
         // One message per second, two lines
         Report("CPU %d%% max %d%% | tune %d Hz fb %d%% mix %d%% rec %d%% | ring %d%% car %d Hz | "
                      "filt %d Hz q %d.%d open %d%%\r\n"
-               "  %s%s | in L %d R %d dB | out L %d R %d dB | blip samples %d",
+               "  %s%s | in L %d R %d dB | out L %d R %d dB | blip samples %d | pitch %s",
                      (int)(cpu.GetAvgCpuLoad() * 100.f), (int)(cpu.GetMaxCpuLoad() * 100.f),
                      (int)bitch::TuneHz(Read(kInputTune)), (int)(Read(kInputFeedback) * 100.f),
                      (int)(Read(kInputMix) * 100.f),
@@ -136,7 +143,7 @@ int main(void) {
                      (int)bitch::CarrierHz(Read(kInputCarrier)), (int)bitch::FilterHz(Read(kInputFilter)),
                      (int)q, (int)(q * 10.f) % 10, (int)(open * 100.f), mode_names[stereo_mode],
                pads_ok ? "" : " (pads not found)", db(in_peak[0]), db(in_peak[1]), db(out_peak[0]),
-               db(out_peak[1]), blip_samples);
+               db(out_peak[1]), blip_samples, pitch);
         blip_samples = 0;
         in_peak[0] = in_peak[1] = out_peak[0] = out_peak[1] = 0.f;
         cpu.Reset();
