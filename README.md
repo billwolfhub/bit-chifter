@@ -57,7 +57,7 @@ pulses), and read the output with `cat /dev/cu.usbmodem*`.
 | Knob 3 FILTER | Radio filter centre, 150 Hz – 5 kHz |
 | Knob 4 WIDTH | Radio filter: narrow and whistly → wide → fully open (from about 97% of the turn) |
 | Knob 5 FEEDBACK | Feedback 0–95% (barberpole) |
-| Knob 6 MIX | Dry/wet |
+| Knob 6 MIX | Dry/wet over the first 85% of the turn; the last 15% stays fully wet and adds a light stereo plate reverb (longer as it rises) |
 | "TOU" logo pad | Stereo mode: 1 blip Linked, 2 Mirror, 3 Rotate (8 s) |
 
 Stereo in, stereo out; a mono source in one input feeds both sides at full level (a side
@@ -67,7 +67,7 @@ Build and flash: `make`, then RESET, BOOT while the LED pulses, `make program-df
 Over USB serial (`cat /dev/cu.usbmodem*`), once a second: CPU load, the
 control values, the stereo mode, the input/output peak levels, a blip counter and the tracked pitch of the input (`--` when it isn't clear). The report is
 sent without waiting (libDaisy's logger blocks the main loop when nothing reads the port).
-Mac tests: `sim/run_tests.sh`. Listen on the Mac: `sim/render.sh in.wav out.wav [tune=Hz] [fb=] [mix=] [ring=] [carrier=Hz] [filter=Hz] [q=] [open=] [reception=] [detent=] [inertia=] [sweep=Hz] [stereo=linked|mirror|rotate]`.
+Mac tests: `sim/run_tests.sh`. Listen on the Mac: `sim/render.sh in.wav out.wav [tune=Hz] [fb=] [mix=] [ring=] [carrier=Hz] [filter=Hz] [q=] [open=] [reception=] [detent=] [inertia=] [reverb=0-1] [sweep=Hz] [stereo=linked|mirror|rotate]`.
 `leveltest/`: input DC/peak/audio levels over USB, with a test tone or passthrough on switch 1.
 
 **Cabling note:** the outputs are stereo on one TRS jack. Into balanced interface inputs,

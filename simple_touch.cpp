@@ -1,7 +1,7 @@
 // bit-chifter for the Synthux Simple Touch: ring mod, shifter, radio filter, stereo.
 // Fader 1 TUNE (the SSB dial: fine +-400 Hz around 0 at the centre, swoop zones to +-2 kHz at the
 // ends, glides like a heavy dial, harmonic detents), fader 2 RECEPTION (clean to lost in the noise), knob 1 RING, knob 2 CARRIER, knob 3 FILTER,
-// knob 4 WIDTH, knob 5 FEEDBACK, knob 6 MIX; the "TOU" logo pad steps the stereo mode
+// knob 4 WIDTH, knob 5 FEEDBACK, knob 6 MIX (its last 15% adds reverb); the "TOU" logo pad steps the stereo mode
 // (Linked / Mirror / Rotate, with 1/2/3 confirmation blips). The CPU load and the
 // controls are printed over USB serial once a second.
 #include "daisy_seed.h"
@@ -49,7 +49,7 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
     bitch::Params p;
     p.tune_hz = bitch::TuneHz(Read(kInputTune));
     p.feedback = 0.95f * Read(kInputFeedback);
-    p.mix = Read(kInputMix);
+    bitch::MixAndReverb(Read(kInputMix), p.mix, p.reverb);
     p.ring = Read(kInputRing);
     p.carrier_hz = bitch::CarrierHz(Read(kInputCarrier));
     p.filter_hz = bitch::FilterHz(Read(kInputFilter));
@@ -133,17 +133,19 @@ int main(void) {
         auto db = [](float v) { return v > 0.0000112f ? (int)lrintf(20.f * log10f(v)) : -99; };
         float q, open;
         bitch::FilterWidth(Read(kInputWidth), q, open);
+        float mix, reverb;
+        bitch::MixAndReverb(Read(kInputMix), mix, reverb);
         // The tracked pitch of the input ("--" when there's no clear pitch)
         char pitch[24] = "--";
         if (engine.PitchConfidence() > 0.f)
             snprintf(pitch, sizeof(pitch), "%d Hz %d%%", (int)engine.Pitch(), (int)(engine.PitchConfidence() * 100.f));
         // One message per second, two lines
-        Report("CPU %d%% max %d%% | tune %d Hz fb %d%% mix %d%% rec %d%% | ring %d%% car %d Hz | "
+        Report("CPU %d%% max %d%% | tune %d Hz fb %d%% mix %d%% rev %d%% rec %d%% | ring %d%% car %d Hz | "
                      "filt %d Hz q %d.%d open %d%%\r\n"
                "  %s%s | in L %d R %d dB | out L %d R %d dB | blip samples %d | pitch %s",
                      (int)(cpu.GetAvgCpuLoad() * 100.f), (int)(cpu.GetMaxCpuLoad() * 100.f),
                      (int)bitch::TuneHz(Read(kInputTune)), (int)(Read(kInputFeedback) * 100.f),
-                     (int)(Read(kInputMix) * 100.f),
+                     (int)(mix * 100.f), (int)(reverb * 100.f),
                      (int)(bitch::ReceptionAmount(Read(kInputReception)) * 100.f), (int)(Read(kInputRing) * 100.f),
                      (int)bitch::CarrierHz(Read(kInputCarrier)), (int)bitch::FilterHz(Read(kInputFilter)),
                      (int)q, (int)(q * 10.f) % 10, (int)(open * 100.f), mode_names[stereo_mode],
