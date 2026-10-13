@@ -380,7 +380,9 @@ static void TestEngineMonoInput() {
     CHECK(fabs(Magnitude(wr, 1100.f) - 0.245) < 0.02, "mono L-only: OUT R 1100 Hz %.3f", Magnitude(wr, 1100.f));
     RunEngineStereo(p, 1.f, 0.f, 0.f, 1000.f, 0.25f, l, r); // IN L silent
     wl = Window(l, 0.5f, 1.f);
+    wr = Window(r, 0.5f, 1.f);
     CHECK(fabs(Magnitude(wl, 1100.f) - 0.245) < 0.02, "mono R-only: OUT L 1100 Hz %.3f", Magnitude(wl, 1100.f));
+    CHECK(fabs(Magnitude(wr, 1100.f) - 0.245) < 0.02, "mono R-only: OUT R 1100 Hz %.3f", Magnitude(wr, 1100.f));
 }
 
 // A real stereo source keeps its sides apart
@@ -473,6 +475,111 @@ static void TestEngineRotateShifts() {
     CHECK(Magnitude(w, 900.f) > 0.06, "rotate start: 900 Hz %.3f", Magnitude(w, 900.f));
 }
 
+
+// Switching stereo mode must not click: the biggest sample-to-sample step around each
+// switch stays under twice the biggest step in steady Linked playback
+static void TestEngineModeSwitchNoClick() {
+    bitch::Engine e;
+    e.Init(kSampleRate);
+    bitch::Params p;
+    p.tune_hz = 300.f;
+    const size_t block = 48;
+    std::vector<float> l(block), r(block), ol(block), orr(block), out;
+    int total = (int)(2.5f * kSampleRate) / block;
+    for (int b = 0; b < total; b++) {
+        float t0 = b * block / kSampleRate;
+        p.stereo_mode = (t0 >= 1.f && t0 < 2.f) ? bitch::StereoMode::kRotate : bitch::StereoMode::kLinked;
+        for (size_t k = 0; k < block; k++) {
+            float t = (b * block + k) / kSampleRate;
+            l[k] = 0.25f * sinf(2 * kPi * 1000.f * t);
+            r[k] = 0.25f * sinf(2 * kPi * 1500.f * t);
+        }
+        e.Process(l.data(), r.data(), ol.data(), orr.data(), block, p);
+        out.insert(out.end(), ol.begin(), ol.end());
+    }
+    auto max_step = [&](float from_s, float to_s) {
+        float m = 0.f;
+        for (int i = (int)(from_s * kSampleRate); i < (int)(to_s * kSampleRate); i++)
+            m = std::max(m, fabsf(out[i + 1] - out[i]));
+        return m;
+    };
+    float steady = max_step(0.5f, 1.f);
+    float to_rotate = max_step(0.9f, 1.1f), to_linked = max_step(1.9f, 2.1f);
+    CHECK(to_rotate < 2.f * steady, "mode switch to Rotate: step %.4f vs steady %.4f", to_rotate, steady);
+    CHECK(to_linked < 2.f * steady, "mode switch to Linked: step %.4f vs steady %.4f", to_linked, steady);
+}
+
+// Rotate half way round: L is shifted down and R up, and the pair is back on its own sides
+static void TestEngineRotateSweep() {
+    bitch::Params p;
+    p.tune_hz = 100.f;
+    p.stereo_mode = bitch::StereoMode::kRotate;
+    std::vector<float> l, r;
+    RunEngineStereo(p, 4.2f, 1000.f, 0.25f, 1000.f, 0.25f, l, r);
+    auto w = Window(l, 3.95f, 4.05f);
+    CHECK(Magnitude(w, 900.f) > 0.06, "rotate sweep 4 s: 900 Hz %.3f", Magnitude(w, 900.f));
+    CHECK(Magnitude(w, 1100.f) > 0.06, "rotate sweep 4 s: 1100 Hz %.3f", Magnitude(w, 1100.f));
+}
+
+// Back in Linked after Mirror, the two oscillators must be back in phase: the mono sum
+// keeps its level
+static void TestEngineLinkedAfterMirror() {
+    bitch::Engine e;
+    e.Init(kSampleRate);
+    bitch::Params p;
+    p.tune_hz = 100.f;
+    const size_t block = 48;
+    std::vector<float> in(block), ol(block), orr(block), l, mono;
+    int total = (int)(3.f * kSampleRate) / block;
+    for (int b = 0; b < total; b++) {
+        float t0 = b * block / kSampleRate;
+        p.stereo_mode = t0 < 1.0025f ? bitch::StereoMode::kMirror : bitch::StereoMode::kLinked;
+        for (size_t k = 0; k < block; k++) in[k] = 0.25f * sinf(2 * kPi * 1000.f * (b * block + k) / kSampleRate);
+        e.Process(in.data(), in.data(), ol.data(), orr.data(), block, p);
+        if (t0 >= 2.5f)
+            for (size_t k = 0; k < block; k++) {
+                l.push_back(ol[k]);
+                mono.push_back(0.5f * (ol[k] + orr[k]));
+            }
+    }
+    double ml = Magnitude(l, 1100.f), mm = Magnitude(mono, 1100.f);
+    CHECK(fabs(Db(mm / ml)) < 1.0, "linked after mirror: mono sum %.3f vs L %.3f", mm, ml);
+}
+
+// The silent side starts taking the other side's signal within 0.2 s
+static void TestEngineMonoTakeoverTiming() {
+    bitch::Params p;
+    p.tune_hz = 100.f;
+    std::vector<float> l, r;
+    RunEngineStereo(p, 0.4f, 1000.f, 0.25f, 0.f, 0.f, l, r);
+    auto w = Window(r, 0.2f, 0.4f);
+    CHECK(Magnitude(w, 1100.f) > 0.2, "mono takeover: OUT R 1100 Hz at 0.2 s %.3f", Magnitude(w, 1100.f));
+}
+
+// A side that is only silent between short bursts must not flip to taking the other side
+static void TestEngineIntermittentSideNoFlap() {
+    bitch::Engine e;
+    e.Init(kSampleRate);
+    bitch::Params p; // tune 0
+    const size_t block = 48;
+    std::vector<float> l(block), r(block), ol(block), orr(block), out_r;
+    int total = (int)(10.f * kSampleRate) / block;
+    for (int b = 0; b < total; b++) {
+        for (size_t k = 0; k < block; k++) {
+            float t = (b * block + k) / kSampleRate;
+            l[k] = 0.25f * sinf(2 * kPi * 1000.f * t);
+            bool burst = fmodf(t, 2.f) < 0.05f;
+            r[k] = burst ? 0.25f * sinf(2 * kPi * 1500.f * t) : 0.f;
+        }
+        e.Process(l.data(), r.data(), ol.data(), orr.data(), block, p);
+        out_r.insert(out_r.end(), orr.begin(), orr.end());
+    }
+    for (float t = 0.5f; t + 0.25f <= 10.f; t += 0.25f) {
+        double m = Magnitude(Window(out_r, t, t + 0.25f), 1000.f);
+        CHECK(m < 0.02, "intermittent R: L's 1000 Hz on OUT R at %.2f s: %.3f", t, m);
+    }
+}
+
 // Start(n) plays n separate beeps, then silence
 static void TestBlips() {
     for (int n = 1; n <= 3; n++) {
@@ -481,15 +588,24 @@ static void TestBlips() {
         b.Start(n);
         // A burst = sound after at least 200 silent samples (the start counts as silence)
         int bursts = 0, silent_run = 1000;
+        float peak = 0.f, prev = 0.f, max_step = 0.f;
         for (int t = 0; t < (int)kSampleRate; t++) {
-            float v = fabsf(b.Process());
+            float s = b.Process();
+            float v = fabsf(s);
+            // each beep starts at a multiple of 150 ms: its first sample must be near silent
+            if (t % 7200 == 0 && t / 7200 < n) CHECK(v < 0.01f, "blips: beep %d starts at %.3f", t / 7200, v);
             if (v > 0.01f) {
                 if (silent_run >= 200) bursts++;
                 silent_run = 0;
             } else {
                 silent_run++;
             }
+            max_step = std::max(max_step, fabsf(s - prev));
+            peak = std::max(peak, v);
+            prev = s;
         }
+        CHECK(peak > 0.18f && peak < 0.21f, "blips: peak %.3f", peak);
+        CHECK(max_step < 0.045f, "blips: max step %.4f", max_step);
         CHECK(bursts == n, "blips: Start(%d) gave %d bursts", n, bursts);
         CHECK(fabsf(b.Process()) < 1e-6f, "blips: still sounding after 1 s");
     }
@@ -514,6 +630,11 @@ int main() {
     TestEngineMirror();
     TestEngineRotateSwapsSides();
     TestEngineRotateShifts();
+    TestEngineModeSwitchNoClick();
+    TestEngineRotateSweep();
+    TestEngineLinkedAfterMirror();
+    TestEngineMonoTakeoverTiming();
+    TestEngineIntermittentSideNoFlap();
     TestRingMod();
     TestRadioFilter();
     TestRadioFilterSweepStable();

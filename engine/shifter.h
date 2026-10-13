@@ -44,6 +44,13 @@ class Shifter {
         return out;
     }
 
+    // The oscillator phase (0-1) and a way to nudge it, so the engine can pull two shifters back in phase
+    float Phase() const { return phase_; }
+    void NudgePhase(float delta) {
+        phase_ += delta;
+        phase_ -= floorf(phase_);
+    }
+
   private:
     Hilbert hilbert_;
     float inv_sample_rate_ = 1.f / 48000.f;

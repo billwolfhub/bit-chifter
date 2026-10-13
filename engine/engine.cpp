@@ -11,7 +11,8 @@ namespace bitch {
 constexpr float Hilbert::kA[4];
 constexpr float Hilbert::kB[4];
 
-static const float kSilent = 0.001f; // -60 dBFS: below this an input counts as unused
+static const float kSilent = 0.001f;  // -60 dBFS: above this an input counts as used at once
+static const float kQuiet = 0.0005f;  // -66 dBFS: an input must stay below this for 3 s to count as unused
 
 static float Clamp(float x, float lo, float hi) { return fminf(fmaxf(x, lo), hi); }
 
@@ -38,6 +39,12 @@ void Engine::Reset() {
     filter_open_ = 1.f;
     block_glide_ = 0.f; // set on the first block (depends on the block size)
     rotate_phase_ = 0.f;
+    side_gain_[0] = side_gain_[1] = 1.f;
+    swap_ = 0.f;
+    ring_amount_ = 0.f;
+    mix_ = 1.f;
+    quiet_blocks_[0] = quiet_blocks_[1] = 0;
+    active_[0] = active_[1] = false;
     envelope_[0] = envelope_[1] = 0.f;
     take_other_[0] = take_other_[1] = 0.f;
 }
@@ -65,37 +72,65 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
     for (RadioFilter &f : filter_) f.Set(filter_hz, filter_q_, filter_open_);
 
     // Mono detection: a side whose input is silent takes the other side's input instead
-    bool active_l = envelope_[0] > kSilent, active_r = envelope_[1] > kSilent;
-    float take_target[2] = {active_r && !active_l ? 1.f : 0.f, active_l && !active_r ? 1.f : 0.f};
+    float take_target[2] = {active_[1] && !active_[0] ? 1.f : 0.f, active_[0] && !active_[1] ? 1.f : 0.f};
+
+    // Stereo mode: per-block targets for each side's share of the shift and for the left/right
+    // swap (glided per sample below, so mode changes don't click)
+    float gain_target[2] = {1.f, 1.f}, swap_target = 0.f;
+    if (params.stereo_mode == StereoMode::kMirror) {
+        gain_target[1] = -1.f;
+    } else if (params.stereo_mode == StereoMode::kRotate) {
+        rotate_phase_ += rotate_step_ * (float)size;
+        rotate_phase_ -= floorf(rotate_phase_);
+        float angle = 6.28318530718f * rotate_phase_;
+        float sweep = cosf(angle); // left's shift goes +shift .. -shift, right's the other way
+        gain_target[0] = sweep;
+        gain_target[1] = -sweep;
+        swap_target = 0.5f + 0.5f * sinf(angle); // the pair circles from left to right
+    } else {
+        // Linked: keep the two oscillators in phase (they are left at an offset after Mirror/Rotate).
+        // Pulling the right one gently (<1 Hz deviation) converges in ~100 ms and is inaudible.
+        // Part 3's drift will scale this down so the sides can wander.
+        float err = shifter_[0].Phase() - shifter_[1].Phase();
+        err -= floorf(err + 0.5f); // wrapped to -0.5..0.5
+        shifter_[1].NudgePhase(0.02f * err);
+    }
 
     for (size_t i = 0; i < size; i++) {
         float x[2] = {in_l[i], in_r[i]};
         for (int c = 0; c < 2; c++) envelope_[c] = fmaxf(fabsf(x[c]), envelope_[c] * envelope_release_);
         shift_hz_ += glide_ * (tune - shift_hz_);
         carrier_hz_ += glide_ * (carrier - carrier_hz_);
-        float shift[2] = {shift_hz_, shift_hz_};
-        float swap = 0.f; // 0 = sides as they are, 1 = fully swapped
-        if (params.stereo_mode == StereoMode::kMirror) {
-            shift[1] = -shift_hz_;
-        } else if (params.stereo_mode == StereoMode::kRotate) {
-            rotate_phase_ += rotate_step_;
-            if (rotate_phase_ >= 1.f) rotate_phase_ -= 1.f;
-            float angle = 6.28318530718f * rotate_phase_;
-            float sweep = cosf(angle); // left's shift goes +shift .. -shift, right's the other way
-            shift[0] = shift_hz_ * sweep;
-            shift[1] = -shift_hz_ * sweep;
-            swap = 0.5f + 0.5f * sinf(angle); // the pair circles from left to right
+        ring_amount_ += glide_ * (ring - ring_amount_);
+        mix_ += glide_ * (mix - mix_);
+        swap_ += glide_ * (swap_target - swap_);
+        float shift[2];
+        for (int c = 0; c < 2; c++) {
+            side_gain_[c] += glide_ * (gain_target[c] - side_gain_[c]);
+            shift[c] = shift_hz_ * side_gain_[c];
         }
         float y[2];
         for (int c = 0; c < 2; c++) {
             take_other_[c] += take_glide_ * (take_target[c] - take_other_[c]);
             float dry = x[c] + take_other_[c] * x[1 - c];
-            float ringed = ring_[c].Process(dry, carrier_hz_, ring);
+            float ringed = ring_[c].Process(dry, carrier_hz_, ring_amount_);
             float wet = filter_[c].Process(shifter_[c].Process(ringed, shift[c], feedback));
-            y[c] = dry + mix * (wet - dry);
+            y[c] = dry + mix_ * (wet - dry);
         }
-        out_l[i] = SoftClip(y[0] + swap * (y[1] - y[0]));
-        out_r[i] = SoftClip(y[1] + swap * (y[0] - y[1]));
+        out_l[i] = SoftClip(y[0] + swap_ * (y[1] - y[0]));
+        out_r[i] = SoftClip(y[1] + swap_ * (y[0] - y[1]));
+    }
+    // Hold: a side counts as active at once when its envelope passes kSilent, and as unused
+    // only after it has stayed below kQuiet for 3 s
+    const int hold_blocks = (int)(3.f * sample_rate_ / (float)size);
+    for (int c = 0; c < 2; c++) {
+        if (envelope_[c] > kSilent) active_[c] = true;
+        if (envelope_[c] > kQuiet) {
+            quiet_blocks_[c] = 0;
+        } else if (++quiet_blocks_[c] >= hold_blocks) {
+            active_[c] = false;
+            quiet_blocks_[c] = hold_blocks;
+        }
     }
     // A NaN/Inf would stay in the feedback loop and silence everything: reset instead
     if (!std::isfinite(out_l[size - 1]) || !std::isfinite(out_r[size - 1])) {
