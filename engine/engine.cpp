@@ -21,11 +21,19 @@ static const float kQuiet = 0.0005f;  // -66 dBFS: an input must stay below this
 
 static float Clamp(float x, float lo, float hi) { return fminf(fmaxf(x, lo), hi); }
 
-void Engine::Init(float sample_rate) {
+void Engine::Init(float sample_rate, size_t block_size) {
     sample_rate_ = sample_rate;
+    float block_rate = sample_rate / (float)block_size;
     for (RingMod &r : ring_) r.Init(sample_rate);
     for (Shifter &s : shifter_) s.Init(sample_rate);
     for (RadioFilter &f : filter_) f.Init(sample_rate);
+    const uint32_t kSeeds[2] = {11u, 29u}; // left and right wander on different paths
+    for (int c = 0; c < 2; c++) {
+        drift_[c].Init(block_rate, kSeeds[c]);
+        fading_[c].Init(sample_rate, block_rate, kSeeds[c] * 13u + 101u);
+        static_[c].Init(sample_rate, kSeeds[c] * 7u + 5u);
+        agc_[c].Init(sample_rate);
+    }
     glide_ = 1.f - expf(-1.f / (0.02f * sample_rate));
     envelope_release_ = expf(-1.f / (0.2f * sample_rate));
     take_glide_ = 1.f - expf(-1.f / (0.05f * sample_rate));
@@ -52,6 +60,9 @@ void Engine::Reset() {
     active_[0] = active_[1] = false;
     envelope_[0] = envelope_[1] = 0.f;
     take_other_[0] = take_other_[1] = 0.f;
+    reception_ = 0.f;
+    for (Fading &f : fading_) f.Reset();
+    for (Agc &a : agc_) a.Reset();
 }
 
 void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *out_r, size_t size,
@@ -69,12 +80,25 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
         log2_filter_hz_ = log2f(Clamp(params.filter_hz, 150.f, 5000.f));
         filter_q_ = Clamp(params.filter_q, 0.7f, 12.f);
         filter_open_ = Clamp(params.filter_open, 0.f, 1.f);
+        reception_ = Clamp(params.reception, 0.f, 1.f);
     }
     log2_filter_hz_ += block_glide_ * (log2f(Clamp(params.filter_hz, 150.f, 5000.f)) - log2_filter_hz_);
     filter_q_ += block_glide_ * (Clamp(params.filter_q, 0.7f, 12.f) - filter_q_);
     filter_open_ += block_glide_ * (Clamp(params.filter_open, 0.f, 1.f) - filter_open_);
     float filter_hz = exp2f(log2_filter_hz_);
     for (RadioFilter &f : filter_) f.Set(filter_hz, filter_q_, filter_open_);
+
+    // Reception: one smoothed amount for every receiver effect
+    reception_ += block_glide_ * (Clamp(params.reception, 0.f, 1.f) - reception_);
+    float r = reception_ < 1e-4f ? 0.f : reception_;
+    drive_.Set(r);
+    float drift_hz[2];
+    for (int c = 0; c < 2; c++) {
+        drift_hz[c] = r > 0.f ? r * 40.f * drift_[c].Next(0.1f + 0.4f * r) : 0.f;
+        fading_[c].Update(r);
+        static_[c].Update(r);
+        agc_[c].Update(r);
+    }
 
     // Mono detection: a side whose input is silent takes the other side's input instead
     float take_target[2] = {active_[1] && !active_[0] ? 1.f : 0.f, active_[0] && !active_[1] ? 1.f : 0.f};
@@ -95,10 +119,10 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
     } else {
         // Linked: keep the two oscillators in phase (they are left at an offset after Mirror/Rotate).
         // Pulling the right one gently (<1 Hz deviation) converges in ~100 ms and is inaudible.
-        // Part 3's drift will scale this down so the sides can wander.
+        // Scaled down by reception so the sides can wander.
         float err = shifter_[0].Phase() - shifter_[1].Phase();
         err -= floorf(err + 0.5f); // wrapped to -0.5..0.5
-        shifter_[1].NudgePhase(0.02f * err);
+        shifter_[1].NudgePhase(0.02f * (1.f - r) * err);
     }
 
     for (size_t i = 0; i < size; i++) {
@@ -118,8 +142,11 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
         for (int c = 0; c < 2; c++) {
             take_other_[c] += take_glide_ * (take_target[c] - take_other_[c]);
             float dry = x[c] + take_other_[c] * x[1 - c];
-            float ringed = ring_[c].Process(dry, carrier_hz_, ring_amount_);
-            float wet = filter_[c].Process(shifter_[c].Process(ringed, shift[c], feedback));
+            float driven = drive_.Process(dry);
+            float ringed = ring_[c].Process(driven, carrier_hz_, ring_amount_);
+            float shifted = shifter_[c].Process(ringed, shift[c] + drift_hz[c], feedback);
+            float received = fading_[c].Process(shifted) + static_[c].Process();
+            float wet = agc_[c].Process(filter_[c].Process(received));
             y[c] = dry + mix_ * (wet - dry);
         }
         out_l[i] = SoftClip(y[0] + swap_ * (y[1] - y[0]));

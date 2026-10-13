@@ -788,6 +788,95 @@ static void TestAgc() {
     CHECK(fabs(Db(quiet / (0.02 * 7.94))) < 1.5, "agc: 0.02 in -> peak %.3f (want the +18 dB limit, 0.159)", quiet);
 }
 
+// Largest |L - R| over the last second of a run
+static float SideDifference(const std::vector<float> &l, const std::vector<float> &r) {
+    float d = 0.f;
+    for (size_t i = l.size() - (size_t)kSampleRate; i < l.size(); i++) d = std::max(d, fabsf(l[i] - r[i]));
+    return d;
+}
+
+// At reception 0 a mono-ish source stays identical on both sides; with reception up,
+// the sides drift (and fade, and get their own static) apart
+static void TestEngineReceptionSeparatesSides() {
+    bitch::Params p;
+    p.tune_hz = 100.f;
+    std::vector<float> l, r;
+    RunEngineStereo(p, 3.f, 1000.f, 0.25f, 1000.f, 0.25f, l, r);
+    CHECK(SideDifference(l, r) < 1e-6f, "reception 0: sides differ by %.6f", SideDifference(l, r));
+    p.reception = 0.5f;
+    RunEngineStereo(p, 3.f, 1000.f, 0.25f, 1000.f, 0.25f, l, r);
+    CHECK(SideDifference(l, r) > 0.05f, "reception 0.5: sides only differ by %.4f", SideDifference(l, r));
+}
+
+// Silence in: reception 0 gives silence out; full reception gives audible static
+static void TestEngineReceptionStatic() {
+    bitch::Params p;
+    std::vector<float> l, r;
+    RunEngineStereo(p, 2.f, 1000.f, 0.f, 1000.f, 0.f, l, r);
+    float peak = 0.f;
+    for (float v : l) peak = std::max(peak, fabsf(v));
+    CHECK(peak < 1e-7f, "reception 0, silence: peak %.8f", peak);
+    p.reception = 1.f;
+    RunEngineStereo(p, 2.f, 1000.f, 0.f, 1000.f, 0.f, l, r);
+    double sum = 0;
+    peak = 0.f;
+    for (size_t i = l.size() / 2; i < l.size(); i++) {
+        sum += l[i] * l[i];
+        peak = std::max(peak, fabsf(l[i]));
+    }
+    float rms = sqrtf((float)(sum / (l.size() / 2)));
+    CHECK(rms > 0.005f, "reception 1, silence: static rms only %.4f", rms);
+    CHECK(peak <= 1.f, "reception 1, silence: peak %.3f", peak);
+}
+
+// A quiet input comes out louder with full reception (AGC boost, plus static)
+static void TestEngineReceptionLiftsQuiet() {
+    bitch::Params p;
+    std::vector<float> l, r;
+    auto rms = [](const std::vector<float> &x) {
+        double s = 0;
+        for (size_t i = x.size() / 2; i < x.size(); i++) s += x[i] * x[i];
+        return sqrt(s / (x.size() / 2));
+    };
+    RunEngineStereo(p, 2.f, 1000.f, 0.02f, 1000.f, 0.02f, l, r);
+    double clean = rms(l);
+    p.reception = 1.f;
+    RunEngineStereo(p, 2.f, 1000.f, 0.02f, 1000.f, 0.02f, l, r);
+    CHECK(Db(rms(l) / clean) > 6, "reception 1: quiet input only %.1f dB louder", Db(rms(l) / clean));
+}
+
+// Everything at once, on noise, for 20 s: finite and within the limiter
+static void TestEngineReceptionStable() {
+    bitch::Engine e;
+    e.Init(kSampleRate);
+    bitch::Params p;
+    p.reception = 1.f;
+    p.feedback = 0.95f;
+    p.ring = 1.f;
+    p.carrier_hz = 300.f;
+    p.filter_q = 12.f;
+    p.filter_open = 0.f;
+    p.filter_hz = 1200.f;
+    p.tune_hz = 37.f;
+    p.stereo_mode = bitch::StereoMode::kMirror;
+    uint32_t seed = 9;
+    float in[48], out_l[48], out_r[48], peak = 0.f;
+    bool finite = true;
+    for (int b = 0; b < (int)(20 * kSampleRate / 48); b++) {
+        for (float &v : in) {
+            seed = seed * 1664525u + 1013904223u;
+            v = ((seed >> 8) / 8388608.f - 1.f) * 0.5f;
+        }
+        e.Process(in, in, out_l, out_r, 48, p);
+        for (int k = 0; k < 48; k++) {
+            finite = finite && std::isfinite(out_l[k]) && std::isfinite(out_r[k]);
+            peak = std::max(peak, std::max(fabsf(out_l[k]), fabsf(out_r[k])));
+        }
+    }
+    CHECK(finite, "reception stress: non-finite output");
+    CHECK(peak <= 1.f, "reception stress: peak %.3f", peak);
+}
+
 int main() {
     TestSoftClip();
     TestHilbertQuadrature();
@@ -822,6 +911,10 @@ int main() {
     TestFading();
     TestDrive();
     TestWander();
+    TestEngineReceptionSeparatesSides();
+    TestEngineReceptionStatic();
+    TestEngineReceptionLiftsQuiet();
+    TestEngineReceptionStable();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }
