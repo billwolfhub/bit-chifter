@@ -1,0 +1,6 @@
+TARGET = LevelTest
+CPP_SOURCES = LevelTest.cpp
+LIBDAISY_DIR = ../../libDaisy
+APP_TYPE = BOOT_SRAM
+SYSTEM_FILES_DIR = $(LIBDAISY_DIR)/core
+include $(SYSTEM_FILES_DIR)/Makefile

@@ -6,6 +6,11 @@
 
 namespace bitch {
 
+// Out-of-class definitions: the firmware builds as C++14, where odr-used static constexpr
+// members need one (redundant but harmless in C++17)
+constexpr float Hilbert::kA[4];
+constexpr float Hilbert::kB[4];
+
 void Engine::Init(float sample_rate) {
     for (Shifter &s : shifter_) s.Init(sample_rate);
     glide_ = 1.f - expf(-1.f / (0.02f * sample_rate));
