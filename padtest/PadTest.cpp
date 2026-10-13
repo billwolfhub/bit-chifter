@@ -1,4 +1,4 @@
-// Bitchshifter pad diagnostic: prints, 10 times a second, how strongly each of
+// bit-chifter pad diagnostic: prints, 10 times a second, how strongly each of
 // the MPR121's 12 channels reacts (baseline minus filtered reading; libDaisy
 // counts a touch at 12 or more) and which channels it reports as touched.
 #include "daisy_seed.h"

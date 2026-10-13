@@ -1,4 +1,4 @@
-# Bitchshifter — design
+# bit-chifter — design
 
 A frequency shifter and ring modulator for the Synthux Simple Touch, voiced as a
 **shortwave sideband receiver**: voices sliding into "Donald Duck" pitch as the dial
@@ -8,7 +8,7 @@ Weave), so it has no reverb or delay of its own (reverb may be added last).
 
 Inspired by the Doepfer A-126-2 (analog frequency shifter, up/down mix, squelch) and
 FreakShift (Reason RE: drive → ring mod → frequency shifter, feedback, width, LFO,
-envelope follower). Local project only (`~/local_files/daisy/bitchshifter`).
+envelope follower). Local project only (`~/local_files/daisy/bit-chifter`).
 
 ## Hardware
 
@@ -129,7 +129,7 @@ in doesn't click). **Movement between the sides** comes from:
 ## Code structure
 
 ```
-bitchshifter/
+bit-chifter/
   engine/            sound only, no hardware code; one file per stage
     drive.h  ring_mod.h  hilbert.h  shifter.h  radio_filter.h  reception.h  engine.h/.cpp
   simple_touch.cpp   Simple Touch front end: knobs, faders, switches, pads, pad modes,

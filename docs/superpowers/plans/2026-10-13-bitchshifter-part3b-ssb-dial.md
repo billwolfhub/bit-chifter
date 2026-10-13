@@ -1,4 +1,4 @@
-# Bitchshifter Part 3b (SSB Dial) Implementation Plan
+# bit-chifter Part 3b (SSB Dial) Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -11,7 +11,7 @@
 **Spec:** `docs/superpowers/specs/2026-10-12-bitchshifter-design.md` (Faders → 1 TUNE and 2 RECEPTION; Signal chain item 3, the shift and harmonic detents).
 
 **Conventions:**
-- Project root `~/local_files/daisy/bitchshifter`, local git, master. No `Co-Authored-By` lines.
+- Project root `~/local_files/daisy/bit-chifter`, local git, master. No `Co-Authored-By` lines.
 - Tests: `sim/run_tests.sh` (prints `All tests passed`). Helpers in `sim/test_engine.cpp`: `CHECK`, `kSampleRate` (48000.f), `kPi`, `Magnitude`, `Db`, `RunEngine`, `RunEngineStereo`, `Window`; `Engine::ShifterPhase(int side)` exists (0–1 oscillator phase).
 - Engine code: single precision only, nothing allocating in `Process()`; the firmware compiles it as gnu++14, so new `static constexpr` members get out-of-class definitions in `engine/engine.cpp`.
 - If a test fails after implementing, don't change tolerances or the given algorithm to make it pass: report the printed numbers.
@@ -68,7 +68,7 @@ with:
 
 - [ ] **Step 2: Run to see it fail**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: FAIL lines for `tune top`, `tune bottom`, `tune fine zone` and `tune end of the fine zone`.
 
 - [ ] **Step 3: Write the new curve**
@@ -99,13 +99,13 @@ inline float TuneHz(float fader) {
 
 - [ ] **Step 4: Run the tests**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: `All tests passed`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd ~/local_files/daisy/bitchshifter
+cd ~/local_files/daisy/bit-chifter
 git add engine/mapping.h sim/test_engine.cpp
 git commit -m "Engine: TUNE as an SSB dial curve (fine +-400 Hz, swoop zones to +-2 kHz)"
 ```
@@ -151,7 +151,7 @@ Call `TestSoftQuantize();` from `main()`.
 
 - [ ] **Step 2: Run to see it fail**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: compile error, `'detents.h' file not found`.
 
 - [ ] **Step 3: Write the curve**
@@ -181,13 +181,13 @@ inline float SoftQuantize(float shift, float step, float amount) {
 
 - [ ] **Step 4: Run the tests**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: `All tests passed`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd ~/local_files/daisy/bitchshifter
+cd ~/local_files/daisy/bit-chifter
 git add engine/detents.h sim/test_engine.cpp
 git commit -m "Engine: harmonic detent curve"
 ```
@@ -244,7 +244,7 @@ Call `TestPitchTracker();` from `main()`.
 
 - [ ] **Step 2: Run to see it fail**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: compile error, `'pitch_tracker.h' file not found`.
 
 - [ ] **Step 3: Write the tracker**
@@ -380,14 +380,14 @@ constexpr float PitchTracker::kThreshold;
 
 - [ ] **Step 4: Run the tests, and check the firmware build**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: `All tests passed`. If a pitch is off by an octave or the confidence misses, report the numbers (don't tune the threshold to the test).
-Run: `make -C ~/local_files/daisy/bitchshifter` — expected: builds, no warnings.
+Run: `make -C ~/local_files/daisy/bit-chifter` — expected: builds, no warnings.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd ~/local_files/daisy/bitchshifter
+cd ~/local_files/daisy/bit-chifter
 git add engine/pitch_tracker.h engine/engine.cpp sim/test_engine.cpp
 git commit -m "Engine: YIN pitch tracker, spread across blocks"
 ```
@@ -489,7 +489,7 @@ Call the three from `main()`.
 
 - [ ] **Step 2: Run to see it fail**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: compile errors, `no member named 'dial_inertia_s'` / `'detent'` in `bitch::Params`, `no member named 'Pitch'` in `bitch::Engine`.
 
 - [ ] **Step 3: Wire the dial into the engine**
@@ -546,18 +546,18 @@ Expected: compile errors, `no member named 'dial_inertia_s'` / `'detent'` in `bi
 
 - [ ] **Step 4: Run the tests**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: `All tests passed`, including every earlier test (detents and inertia default to off; the hand is 0 at reception 0).
 
 - [ ] **Step 5: Check the firmware still builds**
 
-Run: `make -C ~/local_files/daisy/bitchshifter`
+Run: `make -C ~/local_files/daisy/bit-chifter`
 Expected: memory table, no errors or warnings.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd ~/local_files/daisy/bitchshifter
+cd ~/local_files/daisy/bit-chifter
 git add engine/engine.h engine/engine.cpp sim/test_engine.cpp
 git commit -m "Engine: SSB dial (inertia, tuning hand, harmonic detents)"
 ```
@@ -589,7 +589,7 @@ In `sim/render.sh`, add `[detent=] [inertia=] [sweep=Hz]` to the usage comment.
 - [ ] **Step 2: Make a drone and render**
 
 ```bash
-cd ~/local_files/daisy/bitchshifter/sim/out
+cd ~/local_files/daisy/bit-chifter/sim/out
 python3 - <<'EOF'
 # drone.wav: 10 s sawtooth at 110 Hz with a little vibrato (a clear, harmonic source)
 import math, struct, wave
@@ -614,7 +614,7 @@ Expected: `wrote drone.wav` and four `Wrote …` lines, no compiler warnings.
 
 Send the four renders to the user: the same −300 → +300 Hz sweep over a 110 Hz drone without and with detents (listen for the sound lingering harmonically at 0, ±110, ±220 Hz), the voice sweeping through, and the tuning hand wandering into the detents. After they're happy:
 ```bash
-cd ~/local_files/daisy/bitchshifter
+cd ~/local_files/daisy/bit-chifter
 git add sim/render.cpp sim/render.sh
 git commit -m "Render tool: sweep, detent and inertia options"
 ```
@@ -638,12 +638,12 @@ In the report, add the tracked pitch to the second line: after `blip samples %d`
 
 - [ ] **Step 2: Build**
 
-Run: `make -C ~/local_files/daisy/bitchshifter`
+Run: `make -C ~/local_files/daisy/bit-chifter`
 Expected: memory table, no errors or warnings.
 
 - [ ] **Step 3: User flashes and plays it**
 
-User runs `make program-dfu` in `~/local_files/daisy/bitchshifter`. Try:
+User runs `make program-dfu` in `~/local_files/daisy/bit-chifter`. Try:
 - Sweep TUNE slowly around the centre on a pitched sample: the sound should catch and linger where it turns harmonic again (at multiples of the sample's pitch), with chimes in between.
 - Push TUNE to an end: a big swoop, gliding rather than jumping.
 - RECEPTION up: the dial wanders on its own and settles into the detents.
@@ -657,7 +657,7 @@ In `README.md`'s "Controls so far" table, replace the TUNE row with:
 ```
 and add to the RECEPTION row: "and the dial wanders on its own". Add `[detent=] [inertia=] [sweep=Hz]` to the render line, and update the CPU note.
 ```bash
-cd ~/local_files/daisy/bitchshifter
+cd ~/local_files/daisy/bit-chifter
 git add simple_touch.cpp README.md
 git commit -m "Simple Touch firmware: TUNE as the SSB dial (detents, inertia), pitch in the report"
 ```

@@ -1,4 +1,4 @@
-// Bitchshifter for the Synthux Simple Touch: ring mod, shifter, radio filter, stereo.
+// bit-chifter for the Synthux Simple Touch: ring mod, shifter, radio filter, stereo.
 // Fader 1 TUNE (shift, 0 at the centre), fader 2 RECEPTION (clean to lost in the noise), knob 1 RING, knob 2 CARRIER, knob 3 FILTER,
 // knob 4 WIDTH, knob 5 FEEDBACK, knob 6 MIX; the "TOU" logo pad steps the stereo mode
 // (Linked / Mirror / Rotate, with 1/2/3 confirmation blips). The CPU load and the

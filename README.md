@@ -1,4 +1,4 @@
-# Bitchshifter
+# bit-chifter
 
 Frequency shifter / ring mod voiced as a shortwave sideband receiver, for the Synthux
 Simple Touch. Design: `docs/superpowers/specs/2026-10-12-bitchshifter-design.md`.

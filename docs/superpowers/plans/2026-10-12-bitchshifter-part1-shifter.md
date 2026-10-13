@@ -1,4 +1,4 @@
-# Bitchshifter Part 1 (Playable Shifter) Implementation Plan
+# bit-chifter Part 1 (Playable Shifter) Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -11,7 +11,7 @@
 **Spec:** `docs/superpowers/specs/2026-10-12-bitchshifter-design.md`
 
 **Conventions (from this user's Daisy projects):**
-- Project root: `~/local_files/daisy/bitchshifter` (local git repo, already created with the spec).
+- Project root: `~/local_files/daisy/bit-chifter` (local git repo, already created with the spec).
 - The user builds and flashes in their own Terminal: tap RESET, press BOOT while the LED pulses, then `make program-dfu`. Commit only after the user confirms hardware steps work. **No `Co-Authored-By` lines in commits.**
 - newlib-nano has no float `printf`: print numbers as integers.
 - Mac builds need `-isysroot` pointing at `/Library/Developer/CommandLineTools/SDKs/MacOSX26*.sdk`.
@@ -48,7 +48,7 @@ Identifies which of A0–A7 are knobs vs faders (and their direction), and confi
 
 `hwtest/HwTest.cpp`:
 ```cpp
-// Bitchshifter hardware test for the Synthux Simple Touch: prints the 8 analog
+// bit-chifter hardware test for the Synthux Simple Touch: prints the 8 analog
 // inputs (A0-A7, as 0-100), both 3-way switches and the 12 touch pads over USB
 // serial, 5 times a second. Move one control at a time to see which is which.
 #include "daisy_seed.h"
@@ -106,7 +106,7 @@ include $(SYSTEM_FILES_DIR)/Makefile
 
 - [ ] **Step 2: Build**
 
-Run: `cd ~/local_files/daisy/bitchshifter/hwtest && make`
+Run: `cd ~/local_files/daisy/bit-chifter/hwtest && make`
 Expected: ends with a memory table (SRAM well under 480 KB) and no errors.
 
 - [ ] **Step 3: User flashes it and reports the readings**
@@ -125,7 +125,7 @@ cat /dev/cu.usbmodem*
 
 Create `README.md`:
 ```markdown
-# Bitchshifter
+# bit-chifter
 
 Frequency shifter / ring mod voiced as a shortwave sideband receiver, for the Synthux
 Simple Touch. Design: `docs/superpowers/specs/2026-10-12-bitchshifter-design.md`.
@@ -150,7 +150,7 @@ Replace every `?` with the measured values (and note any control that reads reve
 - [ ] **Step 5: Commit**
 
 ```bash
-cd ~/local_files/daisy/bitchshifter
+cd ~/local_files/daisy/bit-chifter
 git add hwtest/HwTest.cpp hwtest/Makefile README.md
 git commit -m "Hardware test firmware and measured Simple Touch control map"
 ```
@@ -169,7 +169,7 @@ git commit -m "Hardware test firmware and measured Simple Touch control map"
 
 `sim/test_engine.cpp`:
 ```cpp
-// Mac tests for the Bitchshifter engine. Build and run with sim/run_tests.sh.
+// Mac tests for the bit-chifter engine. Build and run with sim/run_tests.sh.
 #include <cmath>
 #include <cstdio>
 #include <vector>
@@ -235,11 +235,11 @@ c++ ${SDK:+-isysroot "$SDK"} -std=c++17 -O2 -Wall -Wextra -I../engine $SOURCES -
 ./out/test_engine
 ```
 
-Run: `chmod +x ~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `chmod +x ~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 
 - [ ] **Step 2: Run it to see it fail**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: compile error, `'hilbert.h' file not found`.
 
 - [ ] **Step 3: Write the soft clip and the Hilbert splitter**
@@ -317,13 +317,13 @@ class Hilbert {
 
 - [ ] **Step 4: Run the tests to see them pass**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: `All tests passed`. If the 100 Hz or 15 kHz case fails narrowly, report the printed numbers before changing tolerances (a real phase error would show at both ends).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd ~/local_files/daisy/bitchshifter
+cd ~/local_files/daisy/bit-chifter
 git add engine/softclip.h engine/hilbert.h sim/test_engine.cpp sim/run_tests.sh
 git commit -m "Engine: soft clip and Hilbert phase splitter, with Mac tests"
 ```
@@ -416,7 +416,7 @@ Also add `#include <algorithm>` and `#include <cstdint>` to the includes.
 
 - [ ] **Step 2: Run to see it fail**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: compile error, `'shifter.h' file not found`.
 
 - [ ] **Step 3: Write the shifter**
@@ -481,14 +481,14 @@ class Shifter {
 
 - [ ] **Step 4: Run the tests**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: `All tests passed`.
 If the +100 Hz test reports the energy at 900 Hz and the −100 Hz test at 1100 Hz (up and down swapped), the I/Q sign is reversed for this splitter: change `i * cosf(angle) - q * sinf(angle)` to `i * cosf(angle) + q * sinf(angle)` and run again. If the feedback test's peak is ≥ 4, report the value rather than raising the limit.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd ~/local_files/daisy/bitchshifter
+cd ~/local_files/daisy/bit-chifter
 git add engine/shifter.h sim/test_engine.cpp
 git commit -m "Engine: single-sideband shifter with through-zero and feedback"
 ```
@@ -574,7 +574,7 @@ and call them from `main()`:
 
 - [ ] **Step 2: Run to see it fail**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: compile error, `'engine.h' file not found`.
 
 - [ ] **Step 3: Write the engine**
@@ -661,13 +661,13 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
 
 - [ ] **Step 4: Run the tests**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: `All tests passed`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd ~/local_files/daisy/bitchshifter
+cd ~/local_files/daisy/bit-chifter
 git add engine/engine.h engine/engine.cpp sim/test_engine.cpp
 git commit -m "Engine: mono sum, shift glide, L/R shifters, mix, limiter, NaN guard"
 ```
@@ -771,7 +771,7 @@ inline bool WriteWav(const char *path, const Wav &wav) {
 
 `sim/render.cpp`:
 ```cpp
-// Renders a 16-bit WAV through the Bitchshifter engine.
+// Renders a 16-bit WAV through the bit-chifter engine.
 // Usage: render in.wav out.wav <tune_hz> [feedback 0-0.95] [mix 0-1]
 #include <cstdio>
 #include <cstdlib>
@@ -823,13 +823,13 @@ c++ ${SDK:+-isysroot "$SDK"} -std=c++17 -O2 -Wall -I"$HERE/../engine" "$HERE/ren
 "$HERE/out/render" "$@"
 ```
 
-Run: `chmod +x ~/local_files/daisy/bitchshifter/sim/render.sh`
+Run: `chmod +x ~/local_files/daisy/bit-chifter/sim/render.sh`
 
 - [ ] **Step 3: Make a test voice and render it**
 
 ```bash
-cd ~/local_files/daisy/bitchshifter/sim/out
-say -o voice.aiff "This is station Bitchshifter, broadcasting on the forty metre band. Can you read me?"
+cd ~/local_files/daisy/bit-chifter/sim/out
+say -o voice.aiff "This is station bit-chifter, broadcasting on the forty metre band. Can you read me?"
 afconvert -f WAVE -d LEI16@48000 voice.aiff voice.wav
 ../render.sh voice.wav shift_up_300.wav 300
 ../render.sh voice.wav shift_down_200.wav -200
@@ -842,7 +842,7 @@ Expected: four `Wrote …` lines. Open the folder (`open .`) and play the files:
 
 Ask the user to listen and say whether it sounds right before committing.
 ```bash
-cd ~/local_files/daisy/bitchshifter
+cd ~/local_files/daisy/bit-chifter
 git add sim/wav.h sim/render.cpp sim/render.sh
 git commit -m "Mac render tool for listening to the engine"
 ```
@@ -860,7 +860,7 @@ git commit -m "Mac render tool for listening to the engine"
 
 `simple_touch.cpp` (set the four `kInput…`/`kFlip…` values from the control map measured in Task 1, recorded in `README.md`):
 ```cpp
-// Bitchshifter for the Synthux Simple Touch: part 1, a playable frequency shifter.
+// bit-chifter for the Synthux Simple Touch: part 1, a playable frequency shifter.
 // Fader 1 TUNE (shift, 0 at the centre), knob 5 FEEDBACK, knob 6 MIX. The CPU
 // load is printed over USB serial once a second.
 #include "daisy_seed.h"
@@ -940,8 +940,8 @@ int main(void) {
 
 `Makefile`:
 ```make
-# Bitchshifter for the Synthux Simple Touch
-TARGET = Bitchshifter
+# bit-chifter for the Synthux Simple Touch
+TARGET = bit-chifter
 CPP_SOURCES = simple_touch.cpp engine/engine.cpp
 LIBDAISY_DIR = ../libDaisy
 APP_TYPE = BOOT_SRAM
@@ -952,7 +952,7 @@ include $(SYSTEM_FILES_DIR)/Makefile
 
 - [ ] **Step 2: Build**
 
-Run: `cd ~/local_files/daisy/bitchshifter && make`
+Run: `cd ~/local_files/daisy/bit-chifter && make`
 Expected: memory table, no errors or warnings from `simple_touch.cpp` or `engine/`.
 
 - [ ] **Step 3: User flashes and plays it**
@@ -980,7 +980,7 @@ CPU load over USB serial: `cat /dev/cu.usbmodem*`.
 Mac tests: `sim/run_tests.sh`. Listen on the Mac: `sim/render.sh in.wav out.wav <tune_hz> [feedback] [mix]`.
 ```
 ```bash
-cd ~/local_files/daisy/bitchshifter
+cd ~/local_files/daisy/bit-chifter
 git add simple_touch.cpp Makefile README.md
 git commit -m "Simple Touch firmware: playable shifter (TUNE, FEEDBACK, MIX)"
 ```

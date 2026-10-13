@@ -1,4 +1,4 @@
-// Renders a 16-bit WAV through the Bitchshifter engine.
+// Renders a 16-bit WAV through the bit-chifter engine.
 // Usage: render in.wav out.wav [tune=Hz] [fb=0-0.95] [mix=0-1] [ring=0-1] [carrier=Hz]
 //                              [filter=Hz] [q=0.7-12] [open=0-1] [reception=0-1]
 //                              [detent=0-0.95] [inertia=s] [sweep=Hz] [stereo=linked|mirror|rotate]

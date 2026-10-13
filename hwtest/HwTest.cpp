@@ -1,4 +1,4 @@
-// Bitchshifter hardware test for the Synthux Simple Touch: prints the 8 analog
+// bit-chifter hardware test for the Synthux Simple Touch: prints the 8 analog
 // inputs (A0-A7, as 0-100), both 3-way switches and the 12 touch pads over USB
 // serial, 5 times a second. Move one control at a time to see which is which.
 #include "daisy_seed.h"

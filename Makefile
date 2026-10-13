@@ -1,5 +1,5 @@
-# Bitchshifter for the Synthux Simple Touch
-TARGET = Bitchshifter
+# bit-chifter for the Synthux Simple Touch
+TARGET = bit-chifter
 CPP_SOURCES = simple_touch.cpp engine/engine.cpp
 LIBDAISY_DIR = ../libDaisy
 APP_TYPE = BOOT_SRAM

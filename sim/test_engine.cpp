@@ -1,4 +1,4 @@
-// Mac tests for the Bitchshifter engine. Build and run with sim/run_tests.sh.
+// Mac tests for the bit-chifter engine. Build and run with sim/run_tests.sh.
 #include <cmath>
 #include <cstdio>
 #include <vector>

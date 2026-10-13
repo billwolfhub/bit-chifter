@@ -1,4 +1,4 @@
-// Bitchshifter level test: prints each input's peak level (dBFS) over USB serial
+// bit-chifter level test: prints each input's peak level (dBFS) over USB serial
 // twice a second, and plays, depending on switch 1 (physically left/centre/right):
 //   left   = 440 Hz sine at -6 dBFS on both outputs
 //   centre = straight passthrough (IN L -> OUT L, IN R -> OUT R)

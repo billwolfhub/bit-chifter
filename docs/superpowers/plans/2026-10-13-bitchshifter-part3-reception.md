@@ -1,4 +1,4 @@
-# Bitchshifter Part 3 (Reception) Implementation Plan
+# bit-chifter Part 3 (Reception) Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -11,7 +11,7 @@
 **Spec:** `docs/superpowers/specs/2026-10-12-bitchshifter-design.md` (Faders → 2 RECEPTION; Signal chain items 1 Drive and 5 Reception; the stereo paragraph's Drift).
 
 **Conventions:**
-- Project root `~/local_files/daisy/bitchshifter`, local git, master. No `Co-Authored-By` lines.
+- Project root `~/local_files/daisy/bit-chifter`, local git, master. No `Co-Authored-By` lines.
 - Tests: `sim/run_tests.sh` (prints `All tests passed`). Helpers already in `sim/test_engine.cpp`: `CHECK(cond, fmt...)`, `kSampleRate` (48000.f), `kPi`, `Magnitude(vector, freq)` (Goertzel amplitude), `Db(ratio)`, `RunEngine(params, amplitude, &right)` (1 kHz sine into both inputs, returns the last 0.5 s of OUT L), `RunEngineStereo(params, seconds, freq_l, amp_l, freq_r, amp_r, out_l, out_r)` (full outputs), `Window(x, from_s, to_s)`.
 - Engine code: single precision only (`f` literals, float functions), nothing allocating in `Process()`. Real-time cost matters (Process runs in the audio interrupt): per-sample work stays cheap; random targets and gains update per block.
 - At amount 0, each new stage must return its input **exactly** (so the existing tests stay valid).
@@ -73,7 +73,7 @@ Call `TestWander();` from `main()`.
 
 - [ ] **Step 2: Run to see it fail**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: compile error, `'random.h' file not found`.
 
 - [ ] **Step 3: Write random.h**
@@ -141,13 +141,13 @@ class Wander {
 
 - [ ] **Step 4: Run the tests**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: `All tests passed`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd ~/local_files/daisy/bitchshifter
+cd ~/local_files/daisy/bit-chifter
 git add engine/random.h sim/test_engine.cpp
 git commit -m "Engine: random generator and smoothed random walk"
 ```
@@ -199,7 +199,7 @@ Call `TestDrive();` from `main()`.
 
 - [ ] **Step 2: Run to see it fail**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: compile error, `'drive.h' file not found`.
 
 - [ ] **Step 3: Write the drive**
@@ -238,13 +238,13 @@ class Drive {
 
 - [ ] **Step 4: Run the tests**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: `All tests passed`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd ~/local_files/daisy/bitchshifter
+cd ~/local_files/daisy/bit-chifter
 git add engine/drive.h sim/test_engine.cpp
 git commit -m "Engine: level-compensated drive"
 ```
@@ -312,7 +312,7 @@ Call `TestFading();` from `main()`.
 
 - [ ] **Step 2: Run to see it fail**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: compile error, `'fading.h' file not found`.
 
 - [ ] **Step 3: Write the fading**
@@ -396,13 +396,13 @@ and `#include "fading.h"` at the top of `engine/engine.cpp` if `engine.h` doesn'
 
 - [ ] **Step 4: Run the tests**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: `All tests passed`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd ~/local_files/daisy/bitchshifter
+cd ~/local_files/daisy/bit-chifter
 git add engine/fading.h engine/engine.cpp sim/test_engine.cpp
 git commit -m "Engine: multipath fading"
 ```
@@ -457,7 +457,7 @@ Call `TestStaticNoise();` from `main()`.
 
 - [ ] **Step 2: Run to see it fail**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: compile error, `'static_noise.h' file not found`.
 
 - [ ] **Step 3: Write the static**
@@ -519,13 +519,13 @@ class StaticNoise {
 
 - [ ] **Step 4: Run the tests**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: `All tests passed`. If the RMS or crackle count lands outside its range, report the numbers (the levels are a voicing choice to settle together).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd ~/local_files/daisy/bitchshifter
+cd ~/local_files/daisy/bit-chifter
 git add engine/static_noise.h sim/test_engine.cpp
 git commit -m "Engine: static (hiss and crackles)"
 ```
@@ -581,7 +581,7 @@ Call `TestAgc();` from `main()`.
 
 - [ ] **Step 2: Run to see it fail**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: compile error, `'agc.h' file not found`.
 
 - [ ] **Step 3: Write the AGC**
@@ -650,13 +650,13 @@ Also add `constexpr float Agc::kTarget;` next to the other out-of-class definiti
 
 - [ ] **Step 4: Run the tests**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: `All tests passed`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd ~/local_files/daisy/bitchshifter
+cd ~/local_files/daisy/bit-chifter
 git add engine/agc.h engine/engine.cpp sim/test_engine.cpp
 git commit -m "Engine: receiver-style AGC"
 ```
@@ -681,7 +681,7 @@ In `TestMappings()` in `sim/test_engine.cpp`, append:
 
 - [ ] **Step 2: Run to see it fail**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: compile error, `no member named 'ReceptionAmount' in namespace 'bitch'`.
 
 - [ ] **Step 3: Add the mapping**
@@ -695,13 +695,13 @@ inline float ReceptionAmount(float fader) { return fminf(fmaxf((fader - 0.03f) /
 
 - [ ] **Step 4: Run the tests**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: `All tests passed`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd ~/local_files/daisy/bitchshifter
+cd ~/local_files/daisy/bit-chifter
 git add engine/mapping.h sim/test_engine.cpp
 git commit -m "Engine: RECEPTION fader mapping"
 ```
@@ -812,7 +812,7 @@ Call the four from `main()`.
 
 - [ ] **Step 2: Run to see it fail**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: compile error, `no member named 'reception' in 'bitch::Params'`.
 
 - [ ] **Step 3: Wire Reception into the engine**
@@ -912,18 +912,18 @@ void Engine::Init(float sample_rate, size_t block_size) {
 
 - [ ] **Step 4: Run the tests**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: `All tests passed` — including every earlier test (reception defaults to 0, where every new stage is an exact pass-through).
 
 - [ ] **Step 5: Check the firmware still builds**
 
-Run: `make -C ~/local_files/daisy/bitchshifter`
+Run: `make -C ~/local_files/daisy/bit-chifter`
 Expected: memory table, no errors or warnings.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd ~/local_files/daisy/bitchshifter
+cd ~/local_files/daisy/bit-chifter
 git add engine/engine.h engine/engine.cpp sim/test_engine.cpp
 git commit -m "Engine: Reception (drift, fading, static, AGC, drive) on one amount"
 ```
@@ -943,7 +943,7 @@ In `sim/render.cpp`, add `{"reception", &p.reception}` to the `fields[]` table, 
 - [ ] **Step 2: Render**
 
 ```bash
-cd ~/local_files/daisy/bitchshifter/sim/out
+cd ~/local_files/daisy/bit-chifter/sim/out
 ../render.sh voice.wav p3_reception_25.wav tune=150 filter=1100 q=4 open=0 reception=0.25
 ../render.sh voice.wav p3_reception_60.wav tune=150 filter=1100 q=4 open=0 reception=0.6
 ../render.sh voice.wav p3_reception_100.wav tune=150 filter=1100 q=4 open=0 reception=1
@@ -956,7 +956,7 @@ Expected: five `Wrote …` lines, no compiler warnings.
 
 Send the five files to the user (a light, a moderate and a full reception on the mistuned voice; a "lost station"; and the stereo source drifting apart). After they're happy:
 ```bash
-cd ~/local_files/daisy/bitchshifter
+cd ~/local_files/daisy/bit-chifter
 git add sim/render.cpp sim/render.sh
 git commit -m "Render tool: reception option"
 ```
@@ -979,12 +979,12 @@ In `simple_touch.cpp`:
 
 - [ ] **Step 2: Build**
 
-Run: `make -C ~/local_files/daisy/bitchshifter`
+Run: `make -C ~/local_files/daisy/bit-chifter`
 Expected: memory table, no errors or warnings.
 
 - [ ] **Step 3: User flashes and plays it**
 
-User runs `make program-dfu` in `~/local_files/daisy/bitchshifter`. With a source in, TUNE a little off centre, and a narrow-ish filter (WIDTH around 10 o'clock):
+User runs `make program-dfu` in `~/local_files/daisy/bit-chifter`. With a source in, TUNE a little off centre, and a narrow-ish filter (WIDTH around 10 o'clock):
 - Fader 2 at the bottom: as before (clean).
 - Raising it: the sides start to drift apart (headphones), static appears, the signal fades in and out, quiet moments fill with hiss, and near the top the input is driven into fuzz.
 - Read the USB line (`cat /dev/cu.usbmodem*`): reception % tracks the fader; CPU (expect roughly 20–25%).
@@ -997,7 +997,7 @@ In `README.md`'s "Controls so far" table, add after the TUNE row:
 ```
 and update the CPU note under the table to the measured figure.
 ```bash
-cd ~/local_files/daisy/bitchshifter
+cd ~/local_files/daisy/bit-chifter
 git add simple_touch.cpp README.md
 git commit -m "Simple Touch firmware: RECEPTION on fader 2"
 ```

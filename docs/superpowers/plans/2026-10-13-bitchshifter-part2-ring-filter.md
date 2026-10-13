@@ -1,4 +1,4 @@
-# Bitchshifter Part 2 (Ring Mod, Radio Filter, Stereo) Implementation Plan
+# bit-chifter Part 2 (Ring Mod, Radio Filter, Stereo) Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -11,7 +11,7 @@
 **Spec:** `docs/superpowers/specs/2026-10-12-bitchshifter-design.md` (Controls → Knobs 1–4; Signal chain: the stereo paragraph and items 2 and 4).
 
 **Conventions:**
-- Project root `~/local_files/daisy/bitchshifter`, local git, master. No `Co-Authored-By` lines.
+- Project root `~/local_files/daisy/bit-chifter`, local git, master. No `Co-Authored-By` lines.
 - Tests: `sim/run_tests.sh` (prints `All tests passed`). It compiles `sim/test_engine.cpp` + `engine/engine.cpp`; helpers already there: `CHECK(cond, fmt...)`, `kSampleRate` (48000.f), `kPi`, `Magnitude(vector, freq)` (Goertzel amplitude), `Db(ratio)`, `RunEngine(params, amplitude, &right)` (1 kHz sine into both inputs, returns the last 0.5 s of OUT L).
 - Engine code: single precision only (`f` literals, `sinf`/`tanf`/`powf`...), nothing allocating in `Process()`.
 - Hardware steps: the user flashes (RESET, BOOT while the LED pulses, `make program-dfu`) and confirms before the firmware commit.
@@ -72,7 +72,7 @@ Call `TestRingMod();` from `main()` after the existing tests.
 
 - [ ] **Step 2: Run to see it fail**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: compile error, `'ring_mod.h' file not found`.
 
 - [ ] **Step 3: Write the ring modulator**
@@ -114,13 +114,13 @@ class RingMod {
 
 - [ ] **Step 4: Run the tests**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: `All tests passed`. If a check fails, report the printed numbers; don't change tolerances.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd ~/local_files/daisy/bitchshifter
+cd ~/local_files/daisy/bit-chifter
 git add engine/ring_mod.h sim/test_engine.cpp
 git commit -m "Engine: ring modulator"
 ```
@@ -213,7 +213,7 @@ Call `TestRadioFilter();` and `TestRadioFilterSweepStable();` from `main()`.
 
 - [ ] **Step 2: Run to see it fail**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: compile error, `'radio_filter.h' file not found`.
 
 - [ ] **Step 3: Write the filter**
@@ -297,13 +297,13 @@ class RadioFilter {
 
 - [ ] **Step 4: Run the tests**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: `All tests passed`. If the noise-level or attenuation checks fail, report the printed numbers (the make-up exponent 0.35 is a design choice to revisit together, not a tolerance to tweak).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd ~/local_files/daisy/bitchshifter
+cd ~/local_files/daisy/bit-chifter
 git add engine/radio_filter.h sim/test_engine.cpp
 git commit -m "Engine: radio filter (two SVF band-pass stages, make-up gain, open bypass)"
 ```
@@ -343,7 +343,7 @@ Call `TestMappings();` from `main()`.
 
 - [ ] **Step 2: Run to see it fail**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: compile error, `'mapping.h' file not found`.
 
 - [ ] **Step 3: Write the mappings**
@@ -388,13 +388,13 @@ inline void FilterWidth(float knob, float &q, float &open) {
 
 - [ ] **Step 4: Run the tests**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: `All tests passed`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd ~/local_files/daisy/bitchshifter
+cd ~/local_files/daisy/bit-chifter
 git add engine/mapping.h sim/test_engine.cpp
 git commit -m "Engine: shared knob and fader mappings"
 ```
@@ -515,7 +515,7 @@ Call `TestEngineMonoInput`, `TestEngineStereoKeepsSides`, `TestEngineRingBeforeS
 
 - [ ] **Step 2: Run to see it fail**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: compile errors, `no member named 'ring'` (and `carrier_hz`, `filter_hz`, `filter_q`, `filter_open`) in `bitch::Params`.
 
 - [ ] **Step 3: Extend the engine**
@@ -674,18 +674,18 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
 
 - [ ] **Step 4: Run the tests**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: `All tests passed` (all earlier tests too: identical inputs on both sides still give identical outputs, and the defaults keep part 1's shift). If a check fails, report the numbers; don't change tolerances.
 
 - [ ] **Step 5: Check the firmware still builds**
 
-Run: `make -C ~/local_files/daisy/bitchshifter`
+Run: `make -C ~/local_files/daisy/bit-chifter`
 Expected: memory table, no errors or warnings.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd ~/local_files/daisy/bitchshifter
+cd ~/local_files/daisy/bit-chifter
 git add engine/engine.h engine/engine.cpp sim/test_engine.cpp
 git commit -m "Engine: true stereo with mono detection; ring mod before the shifter, radio filter after"
 ```
@@ -748,7 +748,7 @@ Call the three from `main()`.
 
 - [ ] **Step 2: Run to see it fail**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: compile error, `no member named 'StereoMode' in namespace 'bitch'`.
 
 - [ ] **Step 3: Add the modes**
@@ -800,13 +800,13 @@ In `engine/engine.cpp`:
 
 - [ ] **Step 4: Run the tests**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: `All tests passed`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd ~/local_files/daisy/bitchshifter
+cd ~/local_files/daisy/bit-chifter
 git add engine/engine.h engine/engine.cpp sim/test_engine.cpp
 git commit -m "Engine: stereo modes (Linked, Mirror, Rotate)"
 ```
@@ -849,7 +849,7 @@ Call `TestBlips();` from `main()`.
 
 - [ ] **Step 2: Run to see it fail**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: compile error, `'blips.h' file not found`.
 
 - [ ] **Step 3: Write the blips**
@@ -907,13 +907,13 @@ class Blips {
 
 - [ ] **Step 4: Run the tests**
 
-Run: `~/local_files/daisy/bitchshifter/sim/run_tests.sh`
+Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
 Expected: `All tests passed`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd ~/local_files/daisy/bitchshifter
+cd ~/local_files/daisy/bit-chifter
 git add engine/blips.h sim/test_engine.cpp
 git commit -m "Engine: confirmation blips"
 ```
@@ -930,7 +930,7 @@ git commit -m "Engine: confirmation blips"
 
 `sim/render.cpp`:
 ```cpp
-// Renders a 16-bit WAV through the Bitchshifter engine.
+// Renders a 16-bit WAV through the bit-chifter engine.
 // Usage: render in.wav out.wav [tune=Hz] [fb=0-0.95] [mix=0-1] [ring=0-1] [carrier=Hz]
 //                              [filter=Hz] [q=0.7-12] [open=0-1] [stereo=linked|mirror|rotate]
 // (defaults are the engine's: no shift, no ring mod, filter open, linked)
@@ -1015,7 +1015,7 @@ In `sim/render.sh`, change the usage comment to: `# Builds the render tool and r
 - [ ] **Step 2: Render the receiver sounds**
 
 ```bash
-cd ~/local_files/daisy/bitchshifter/sim/out
+cd ~/local_files/daisy/bit-chifter/sim/out
 ../render.sh voice.wav p2_radio_band.wav filter=1200 q=5 open=0
 ../render.sh voice.wav p2_ssb_mistuned.wav tune=180 filter=1100 q=4 open=0
 ../render.sh voice.wav p2_ring_bells.wav ring=1 carrier=700
@@ -1030,7 +1030,7 @@ Expected: seven `Wrote …` lines, no compiler warnings. (`stereo_source.wav` is
 
 Send the seven files to the user. After they're happy:
 ```bash
-cd ~/local_files/daisy/bitchshifter
+cd ~/local_files/daisy/bit-chifter
 git add sim/render.cpp sim/render.sh
 git commit -m "Render tool: key=value options for every engine parameter"
 ```
@@ -1133,12 +1133,12 @@ Note on threads: `blips.Start()` runs in the main loop while `blips.Process()` r
 
 - [ ] **Step 2: Build**
 
-Run: `make -C ~/local_files/daisy/bitchshifter`
+Run: `make -C ~/local_files/daisy/bit-chifter`
 Expected: memory table, no errors or warnings.
 
 - [ ] **Step 3: User flashes and plays it**
 
-User runs `make program-dfu` in `~/local_files/daisy/bitchshifter`. With a source into the inputs:
+User runs `make program-dfu` in `~/local_files/daisy/bit-chifter`. With a source into the inputs:
 - WIDTH (knob 4) fully clockwise: filter open, like part 1. Turn it back: the band narrows, boxy then whistly. FILTER (knob 3) sweeps it.
 - RING (knob 1) up, CARRIER (knob 2) low: tremolo; higher: metallic, bell-like.
 - A mono source in one input comes out of both sides at full level.
@@ -1164,7 +1164,7 @@ Stereo in, stereo out; a mono source in one input feeds both sides at full level
 ```
 and change the render line to `sim/render.sh in.wav out.wav [tune=Hz] [fb=] [mix=] [ring=] [carrier=Hz] [filter=Hz] [q=] [open=] [stereo=linked|mirror|rotate]`.
 ```bash
-cd ~/local_files/daisy/bitchshifter
+cd ~/local_files/daisy/bit-chifter
 git add simple_touch.cpp README.md
 git commit -m "Simple Touch firmware: ring mod and radio filter on knobs 1-4, stereo mode on the TOU pad"
 ```
