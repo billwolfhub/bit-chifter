@@ -10,6 +10,8 @@
 #include "fading.h"
 #include "random.h"
 #include "static_noise.h"
+#include "detents.h"
+#include "pitch_tracker.h"
 
 namespace bitch {
 
@@ -28,6 +30,8 @@ struct Params {
     float filter_open = 1.f;  // 1 = filter bypassed
     StereoMode stereo_mode = StereoMode::kLinked;
     float reception = 0.f;    // 0 clean .. 1 lost in the noise (drift, fading, static, AGC, drive)
+    float detent = 0.f;          // harmonic detent strength 0-0.95 (0 = off; the firmware uses 0.7)
+    float dial_inertia_s = 0.f;  // TUNE inertia, per stage of two (0 = off; the firmware uses 0.06)
 };
 
 // The sound engine: no hardware code, so it runs on the Daisy and on the Mac.
@@ -38,12 +42,16 @@ struct Params {
 // Rotate (over 8 s the sides' shifts sweep through each other and the pair circles left to right).
 // Reception (0-1) adds, per side: drive -> ring mod -> shifter (+ its own drift, up to ±40 Hz) -> fading ->
 // + static -> radio filter -> AGC. At 0 every stage is an exact pass-through.
+// The shift (TUNE) goes through optional inertia, the tuning hand (reception x ±150 Hz) and the
+// harmonic detents (pulled onto multiples of the tracked pitch) once per block.
 class Engine {
   public:
     // block_size: the size every Process() call will use (the firmware and sim use 48)
     void Init(float sample_rate, size_t block_size = 48);
     // Test hook: a side's shifter oscillator phase (0-1)
     float ShifterPhase(int side) const { return shifter_[side].Phase(); }
+    float Pitch() const { return pitch_.Pitch(); }                // the source's tracked fundamental, Hz
+    float PitchConfidence() const { return pitch_.Confidence(); } // 0-1
     void Process(const float *in_l, const float *in_r, float *out_l, float *out_r, size_t size,
                  const Params &params);
 
@@ -53,7 +61,7 @@ class Engine {
     RingMod ring_[2];
     Shifter shifter_[2];
     RadioFilter filter_[2];
-    float shift_hz_ = 0.f;     // glided towards params.tune_hz
+    float shift_hz_ = 0.f;     // glided towards target_shift_ (the dial)
     float carrier_hz_ = 100.f; // glided towards params.carrier_hz
     float glide_ = 0.f;        // per-sample one-pole coefficient, ~20 ms
     float log2_filter_hz_ = 0.f, filter_q_ = 0.7f, filter_open_ = 1.f; // smoothed per block
@@ -79,6 +87,12 @@ class Engine {
     Fading fading_[2];
     StaticNoise static_[2];
     Agc agc_[2];
+    // The SSB dial: inertia on TUNE, the tuning hand, and the harmonic detents
+    float dial_[2] = {0.f, 0.f}; // two-stage inertia
+    Wander hand_;                // wanders the dial with reception (shared by both sides)
+    PitchTracker pitch_;
+    float detent_amount_ = 0.f;  // strength x confidence, smoothed per block
+    float target_shift_ = 0.f;   // the dial's shift for this block; shift_hz_ glides to it
 };
 
 } // namespace bitch

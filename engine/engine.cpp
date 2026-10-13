@@ -42,6 +42,8 @@ void Engine::Init(float sample_rate, size_t block_size) {
         static_[c].Init(sample_rate, kSeeds[c] * 7u + 5u);
         agc_[c].Init(sample_rate);
     }
+    hand_.Init(block_rate, 47u);
+    pitch_.Init(sample_rate);
     glide_ = 1.f - expf(-1.f / (0.02f * sample_rate));
     envelope_release_ = expf(-1.f / (0.2f * sample_rate));
     take_glide_ = 1.f - expf(-1.f / (0.05f * sample_rate));
@@ -72,6 +74,10 @@ void Engine::Reset() {
     for (Fading &f : fading_) f.Reset();
     for (Agc &a : agc_) a.Reset();
     for (StaticNoise &n : static_) n.Reset();
+    dial_[0] = dial_[1] = 0.f;
+    detent_amount_ = 0.f;
+    target_shift_ = 0.f;
+    pitch_.Reset();
 }
 
 void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *out_r, size_t size,
@@ -90,6 +96,7 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
         filter_q_ = Clamp(params.filter_q, 0.7f, 12.f);
         filter_open_ = Clamp(params.filter_open, 0.f, 1.f);
         reception_ = Clamp(params.reception, 0.f, 1.f);
+        dial_[0] = dial_[1] = tune;
     }
     log2_filter_hz_ += block_glide_ * (log2f(Clamp(params.filter_hz, 150.f, 5000.f)) - log2_filter_hz_);
     filter_q_ += block_glide_ * (Clamp(params.filter_q, 0.7f, 12.f) - filter_q_);
@@ -108,6 +115,23 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
         static_[c].Update(r);
         agc_[c].Update(r);
     }
+
+    // The SSB dial, once per block: TUNE through the inertia, plus the tuning hand, then
+    // pulled towards multiples of the source's pitch (strength x confidence, smoothed)
+    float dial = tune;
+    if (params.dial_inertia_s > 0.f) {
+        float k = 1.f - expf(-(float)size / (params.dial_inertia_s * sample_rate_));
+        dial_[0] += k * (tune - dial_[0]);
+        dial_[1] += k * (dial_[0] - dial_[1]);
+        dial = dial_[1];
+    } else {
+        dial_[0] = dial_[1] = tune;
+    }
+    float hand = r > 0.f ? r * 150.f * hand_.Next(0.15f + 0.15f * r) : 0.f;
+    float detent_target = Clamp(params.detent, 0.f, 0.95f) * pitch_.Confidence();
+    detent_amount_ += block_glide_ * (detent_target - detent_amount_);
+    if (detent_amount_ < 1e-4f && detent_target == 0.f) detent_amount_ = 0.f;
+    target_shift_ = SoftQuantize(dial + hand, pitch_.Pitch(), detent_amount_);
 
     // Mono detection: a side whose input is silent takes the other side's input instead
     float take_target[2] = {active_[1] && !active_[0] ? 1.f : 0.f, active_[0] && !active_[1] ? 1.f : 0.f};
@@ -141,8 +165,9 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
 
     for (size_t i = 0; i < size; i++) {
         float x[2] = {in_l[i], in_r[i]};
+        pitch_.Push(0.5f * (x[0] + x[1]));
         for (int c = 0; c < 2; c++) envelope_[c] = fmaxf(fabsf(x[c]), envelope_[c] * envelope_release_);
-        shift_hz_ += glide_ * (tune - shift_hz_);
+        shift_hz_ += glide_ * (target_shift_ - shift_hz_);
         carrier_hz_ += glide_ * (carrier - carrier_hz_);
         ring_amount_ += glide_ * (ring - ring_amount_);
         mix_ += glide_ * (mix - mix_);
@@ -166,6 +191,7 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
         out_l[i] = SoftClip(y[0] + swap_ * (y[1] - y[0]));
         out_r[i] = SoftClip(y[1] + swap_ * (y[0] - y[1]));
     }
+    pitch_.Work();
     // Hold: a side counts as active at once when its envelope passes kSilent, and as unused
     // only after it has stayed below kQuiet for 3 s
     const int hold_blocks = (int)(3.f * sample_rate_ / (float)size);

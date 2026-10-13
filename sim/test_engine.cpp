@@ -1088,6 +1088,86 @@ static void TestPitchTracker() {
     CHECK(t.Confidence() == 0.f, "pitch: silence confidence %.2f", t.Confidence());
 }
 
+// Runs an engine block by block on a signal into both inputs, returning the left
+// shifter's frequency (from its phase advance) at the end of each block
+template <class Signal>
+static std::vector<float> ShiftTrace(bitch::Engine &e, const bitch::Params &p, float seconds, Signal signal) {
+    std::vector<float> trace;
+    float in[48], out_l[48], out_r[48];
+    float prev = e.ShifterPhase(0);
+    int blocks = (int)(seconds * kSampleRate / 48);
+    for (int b = 0; b < blocks; b++) {
+        for (int k = 0; k < 48; k++) in[k] = signal(b * 48 + k);
+        e.Process(in, in, out_l, out_r, 48, p);
+        float phase = e.ShifterPhase(0), d = phase - prev;
+        d -= floorf(d + 0.5f);
+        trace.push_back(d * kSampleRate / 48.f);
+        prev = phase;
+    }
+    return trace;
+}
+
+static float Sawtooth120(int n) {
+    float x = 120.f * n / kSampleRate;
+    return 0.25f * (2.f * (x - floorf(x)) - 1.f);
+}
+
+// With inertia, a jump of the dial becomes a sweep
+static void TestEngineDialInertia() {
+    bitch::Engine e;
+    e.Init(kSampleRate);
+    bitch::Params p;
+    p.tune_hz = 0.f;
+    ShiftTrace(e, p, 0.2f, [](int) { return 0.f; });
+    p.tune_hz = 200.f;
+    p.dial_inertia_s = 0.06f;
+    auto trace = ShiftTrace(e, p, 1.f, [](int) { return 0.f; });
+    CHECK(trace[50] < 120.f, "inertia: already at %.1f Hz after 50 ms", trace[50]);
+    CHECK(fabsf(trace.back() - 200.f) < 1.f, "inertia: settled at %.1f Hz", trace.back());
+    bitch::Engine quick;
+    quick.Init(kSampleRate);
+    p.tune_hz = 0.f;
+    p.dial_inertia_s = 0.f;
+    ShiftTrace(quick, p, 0.2f, [](int) { return 0.f; });
+    p.tune_hz = 200.f;
+    auto direct = ShiftTrace(quick, p, 0.1f, [](int) { return 0.f; });
+    CHECK(direct[50] > 180.f, "no inertia: only %.1f Hz after 50 ms", direct[50]);
+}
+
+// Detents pull the shift towards a multiple of the source's pitch (120 Hz sawtooth)
+static void TestEngineDetents() {
+    bitch::Params p;
+    p.tune_hz = 100.f;
+    p.detent = 0.7f;
+    bitch::Engine e;
+    e.Init(kSampleRate);
+    auto pulled = ShiftTrace(e, p, 1.5f, Sawtooth120);
+    CHECK(pulled.back() > 104.f && pulled.back() < 119.f, "detents: 100 Hz shift on a 120 Hz source -> %.1f Hz",
+          pulled.back());
+    CHECK(fabsf(e.Pitch() - 120.f) < 3.f && e.PitchConfidence() > 0.7f, "detents: tracked %.1f Hz (conf %.2f)",
+          e.Pitch(), e.PitchConfidence());
+    p.detent = 0.f;
+    bitch::Engine plain;
+    plain.Init(kSampleRate);
+    auto free_shift = ShiftTrace(plain, p, 1.5f, Sawtooth120);
+    CHECK(fabsf(free_shift.back() - 100.f) < 0.5f, "no detents: %.1f Hz", free_shift.back());
+}
+
+// With reception up, the tuning hand wanders the dial around the TUNE setting
+static void TestEngineTuningHand() {
+    bitch::Params p;
+    p.reception = 1.f;
+    bitch::Engine e;
+    e.Init(kSampleRate);
+    auto trace = ShiftTrace(e, p, 10.f, [](int) { return 0.f; });
+    float lo = 1e9f, hi = -1e9f;
+    for (size_t i = trace.size() / 5; i < trace.size(); i++) {
+        lo = std::min(lo, trace[i]);
+        hi = std::max(hi, trace[i]);
+    }
+    CHECK(hi - lo > 80.f, "tuning hand: only wandered %.1f Hz", hi - lo);
+}
+
 int main() {
     TestSoftQuantize();
     TestSoftClip();
@@ -1134,6 +1214,9 @@ int main() {
     TestEngineLinkedDrifts();
     TestEngineReceptionReturnsClean();
     TestPitchTracker();
+    TestEngineDialInertia();
+    TestEngineDetents();
+    TestEngineTuningHand();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }
