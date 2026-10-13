@@ -50,7 +50,8 @@ class Engine {
     void Init(float sample_rate, size_t block_size = 48);
     // Test hook: a side's shifter oscillator phase (0-1)
     float ShifterPhase(int side) const { return shifter_[side].Phase(); }
-    float Pitch() const { return pitch_.Pitch(); }                // the source's tracked fundamental, Hz
+    // The source's tracked fundamental, Hz (the last one found: kept when the confidence drops to 0)
+    float Pitch() const { return pitch_.Pitch(); }
     float PitchConfidence() const { return pitch_.Confidence(); } // 0-1
     void Process(const float *in_l, const float *in_r, float *out_l, float *out_r, size_t size,
                  const Params &params);
@@ -67,6 +68,7 @@ class Engine {
     float log2_filter_hz_ = 0.f, filter_q_ = 0.7f, filter_open_ = 1.f; // smoothed per block
     // Assumes a fixed block size (the coefficient is set from the first block's size)
     float block_glide_ = 0.f;  // per-block one-pole coefficient, ~30 ms
+    float detent_release_ = 0.f; // per-block one-pole coefficient, ~150 ms (detent_amount_ falling)
     float sample_rate_ = 48000.f;
     // Mono detection: input envelopes, and how much of the other side each chain takes
     float envelope_[2] = {0.f, 0.f};

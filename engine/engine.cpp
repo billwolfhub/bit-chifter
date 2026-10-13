@@ -4,7 +4,6 @@
 
 #include "agc.h"
 #include "fading.h"
-#include "pitch_tracker.h"
 #include "softclip.h"
 
 namespace bitch {
@@ -61,6 +60,7 @@ void Engine::Reset() {
     filter_q_ = 0.7f;
     filter_open_ = 1.f;
     block_glide_ = 0.f; // set on the first block (depends on the block size)
+    detent_release_ = 0.f;
     rotate_phase_ = 0.f;
     side_gain_[0] = side_gain_[1] = 1.f;
     swap_ = 0.f;
@@ -92,6 +92,7 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
     // Filter settings change once per block, smoothed (the centre in octaves)
     if (block_glide_ == 0.f) {
         block_glide_ = 1.f - expf(-(float)size / (0.03f * sample_rate_));
+        detent_release_ = 1.f - expf(-(float)size / (0.15f * sample_rate_));
         log2_filter_hz_ = log2f(Clamp(params.filter_hz, 150.f, 5000.f));
         filter_q_ = Clamp(params.filter_q, 0.7f, 12.f);
         filter_open_ = Clamp(params.filter_open, 0.f, 1.f);
@@ -129,7 +130,9 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
     }
     float hand = r > 0.f ? r * 150.f * hand_.Next(0.15f + 0.15f * r) : 0.f;
     float detent_target = Clamp(params.detent, 0.f, 0.95f) * pitch_.Confidence();
-    detent_amount_ += block_glide_ * (detent_target - detent_amount_);
+    // Rises in ~30 ms, falls in ~150 ms, so one analysis without a pitch doesn't pump the detents
+    float detent_glide = detent_target > detent_amount_ ? block_glide_ : detent_release_;
+    detent_amount_ += detent_glide * (detent_target - detent_amount_);
     if (detent_amount_ < 1e-4f && detent_target == 0.f) detent_amount_ = 0.f;
     target_shift_ = SoftQuantize(dial + hand, pitch_.Pitch(), detent_amount_);
 

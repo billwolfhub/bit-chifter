@@ -1088,23 +1088,69 @@ static void TestPitchTracker() {
     CHECK(t.Confidence() == 0.f, "pitch: silence confidence %.2f", t.Confidence());
 }
 
-// Runs an engine block by block on a signal into both inputs, returning the left
-// shifter's frequency (from its phase advance) at the end of each block
+static float Sine(float hz, int n) { return 0.25f * sinf(2 * kPi * hz * n / kSampleRate); }
+static float Saw(float hz, int n) {
+    float x = hz * n / kSampleRate;
+    return 0.25f * (2.f * (x - floorf(x)) - 1.f);
+}
+
+// A pitch buried in noise (no dip below the YIN threshold) still gives a partial confidence
+static void TestPitchTrackerGradedConfidence() {
+    bitch::PitchTracker t;
+    uint32_t seed = 7;
+    Track(t, 0.5f, [&seed](int n) {
+        seed = seed * 1664525u + 1013904223u;
+        return Sine(200.f, n) + 0.8f * ((seed >> 8) / 8388608.f - 1.f);
+    });
+    CHECK(t.Confidence() > 0.2f && t.Confidence() < 0.85f && fabsf(t.Pitch() - 200.f) < 6.f,
+          "pitch: 200 Hz in noise -> %.2f Hz (conf %.2f)", t.Pitch(), t.Confidence());
+}
+
+// Pitches just outside 60-800 Hz must not be reported at the range edge with high confidence
+static void TestPitchTrackerRangeEdges() {
+    bitch::PitchTracker t;
+    for (int saw = 0; saw < 2; saw++) {
+        const char *name = saw ? "saw" : "sine";
+        for (float hz : {820.f, 850.f}) {
+            Track(t, 0.5f, [saw, hz](int n) { return saw ? Saw(hz, n) : Sine(hz, n); });
+            float p = t.Pitch(), c = t.Confidence();
+            bool subharmonic = fabsf(p - hz / 2.f) < 0.03f * hz / 2.f || fabsf(p - hz / 3.f) < 0.03f * hz / 3.f;
+            CHECK(c <= 0.5f || subharmonic, "pitch edge: %.0f Hz %s -> %.2f Hz (conf %.2f)", hz, name, p, c);
+        }
+        for (float hz : {55.f, 59.f}) {
+            Track(t, 0.5f, [saw, hz](int n) { return saw ? Saw(hz, n) : Sine(hz, n); });
+            float p = t.Pitch(), c = t.Confidence();
+            CHECK(c < 0.5f || fabsf(p - hz) < 2.f, "pitch edge: %.0f Hz %s -> %.2f Hz (conf %.2f)", hz, name, p, c);
+        }
+    }
+}
+
+// Runs an engine block by block on a signal into both inputs, returning each side's
+// shifter frequency (from its phase advance) at the end of each block
 template <class Signal>
-static std::vector<float> ShiftTrace(bitch::Engine &e, const bitch::Params &p, float seconds, Signal signal) {
-    std::vector<float> trace;
+static void ShiftTraces(bitch::Engine &e, const bitch::Params &p, float seconds, Signal signal,
+                        std::vector<float> &left, std::vector<float> &right) {
     float in[48], out_l[48], out_r[48];
-    float prev = e.ShifterPhase(0);
+    float prev[2] = {e.ShifterPhase(0), e.ShifterPhase(1)};
     int blocks = (int)(seconds * kSampleRate / 48);
     for (int b = 0; b < blocks; b++) {
         for (int k = 0; k < 48; k++) in[k] = signal(b * 48 + k);
         e.Process(in, in, out_l, out_r, 48, p);
-        float phase = e.ShifterPhase(0), d = phase - prev;
-        d -= floorf(d + 0.5f);
-        trace.push_back(d * kSampleRate / 48.f);
-        prev = phase;
+        for (int c = 0; c < 2; c++) {
+            float phase = e.ShifterPhase(c), d = phase - prev[c];
+            d -= floorf(d + 0.5f);
+            (c == 0 ? left : right).push_back(d * kSampleRate / 48.f);
+            prev[c] = phase;
+        }
     }
-    return trace;
+}
+
+// The left side's shift only
+template <class Signal>
+static std::vector<float> ShiftTrace(bitch::Engine &e, const bitch::Params &p, float seconds, Signal signal) {
+    std::vector<float> left, right;
+    ShiftTraces(e, p, seconds, signal, left, right);
+    return left;
 }
 
 static float Sawtooth120(int n) {
@@ -1132,6 +1178,48 @@ static void TestEngineDialInertia() {
     p.tune_hz = 200.f;
     auto direct = ShiftTrace(quick, p, 0.1f, [](int) { return 0.f; });
     CHECK(direct[50] > 180.f, "no inertia: only %.1f Hz after 50 ms", direct[50]);
+}
+
+// Inertia from the very first block: the dial starts at TUNE, it doesn't sweep in from 0
+static void TestEngineDialInertiaFromStart() {
+    bitch::Engine e;
+    e.Init(kSampleRate);
+    bitch::Params p;
+    p.tune_hz = 200.f;
+    p.dial_inertia_s = 0.06f;
+    auto trace = ShiftTrace(e, p, 0.1f, [](int) { return 0.f; });
+    CHECK(trace[50] > 180.f, "inertia from start: only %.1f Hz after 50 ms", trace[50]);
+}
+
+// When the source stops, the detents fade out (in ~150 ms, so a dropped analysis doesn't
+// pump them) and the shift returns to TUNE. Pulled to ~111.5 Hz; one block = 1 ms
+static void TestEngineDetentsRelease() {
+    bitch::Params p;
+    p.tune_hz = 100.f;
+    p.detent = 0.7f;
+    bitch::Engine e;
+    e.Init(kSampleRate);
+    ShiftTrace(e, p, 1.5f, Sawtooth120);
+    auto after = ShiftTrace(e, p, 0.75f, [](int) { return 0.f; });
+    CHECK(after[100] > 105.f, "detents release: already at %.2f Hz 100 ms after the source stopped", after[100]);
+    CHECK(fabsf(after.back() - 100.f) < 0.5f, "detents release: %.2f Hz 0.75 s after the source stopped",
+          after.back());
+}
+
+// Mirror with detents: the right side's shift is exactly the opposite of the left's
+static void TestEngineMirrorDetents() {
+    bitch::Params p;
+    p.tune_hz = 100.f;
+    p.detent = 0.7f;
+    p.stereo_mode = bitch::StereoMode::kMirror;
+    bitch::Engine e;
+    e.Init(kSampleRate);
+    std::vector<float> l, r;
+    ShiftTraces(e, p, 1.5f, Sawtooth120, l, r);
+    CHECK(l.back() > 104.f && l.back() < 119.f, "mirror detents: left %.2f Hz", l.back());
+    float worst = 0.f;
+    for (size_t i = l.size() / 2; i < l.size(); i++) worst = std::max(worst, fabsf(l[i] + r[i]));
+    CHECK(worst < 0.01f, "mirror detents: right differs from -left by %.4f Hz", worst);
 }
 
 // Detents pull the shift towards a multiple of the source's pitch (120 Hz sawtooth)
@@ -1214,8 +1302,13 @@ int main() {
     TestEngineLinkedDrifts();
     TestEngineReceptionReturnsClean();
     TestPitchTracker();
+    TestPitchTrackerRangeEdges();
+    TestPitchTrackerGradedConfidence();
     TestEngineDialInertia();
     TestEngineDetents();
+    TestEngineDialInertiaFromStart();
+    TestEngineDetentsRelease();
+    TestEngineMirrorDetents();
     TestEngineTuningHand();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
