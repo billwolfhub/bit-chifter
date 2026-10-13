@@ -11,6 +11,7 @@
 #include "mapping.h"
 #include "radio_filter.h"
 #include "ring_mod.h"
+#include "static_noise.h"
 #include "fading.h"
 #include "drive.h"
 #include "random.h"
@@ -714,6 +715,39 @@ static void TestFading() {
     CHECK(peak < 0.45f, "fading 1: peak %.3f", peak); // gain <= 1, echo comb up to +4 dB: 0.25 * 1.6 = 0.4
 }
 
+static void TestStaticNoise() {
+    bitch::StaticNoise off;
+    off.Init(kSampleRate, 7);
+    off.Update(0.f);
+    bool silent = true;
+    for (int t = 0; t < (int)kSampleRate; t++) silent = silent && off.Process() == 0.f;
+    CHECK(silent, "static 0: not silent");
+
+    // Full level for 10 s: audible hiss, a few hundred crackles, bounded
+    bitch::StaticNoise s;
+    s.Init(kSampleRate, 7);
+    s.Update(1.f);
+    double sum = 0;
+    float peak = 0.f;
+    int crackles = 0;
+    int since_last = 1 << 30;
+    int n = 10 * (int)kSampleRate;
+    for (int t = 0; t < n; t++) {
+        float v = s.Process();
+        sum += v * v;
+        peak = std::max(peak, fabsf(v));
+        since_last++;
+        if (fabsf(v) > 0.15f && since_last >= 240) {
+            crackles++;
+            since_last = 0;
+        }
+    }
+    float rms = sqrtf((float)(sum / n));
+    CHECK(rms > 0.01f && rms < 0.15f, "static 1: rms %.4f", rms);
+    CHECK(crackles > 30 && crackles < 1000, "static 1: %d crackles in 10 s", crackles);
+    CHECK(peak < 0.6f, "static 1: peak %.3f", peak);
+}
+
 int main() {
     TestSoftClip();
     TestHilbertQuadrature();
@@ -743,6 +777,7 @@ int main() {
     TestRadioFilterSweepStable();
     TestMappings();
     TestBlips();
+    TestStaticNoise();
     TestFading();
     TestDrive();
     TestWander();
