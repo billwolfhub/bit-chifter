@@ -7,6 +7,7 @@
 #include "hilbert.h"
 #include "softclip.h"
 #include "shifter.h"
+#include "radio_filter.h"
 #include "ring_mod.h"
 #include <algorithm>
 #include <cstdint>
@@ -263,6 +264,78 @@ static void TestRingMod() {
     CHECK(fabs(Magnitude(half, 1100.f) - 0.0625) < 0.01, "ring 0.5: 1100 Hz %.3f", Magnitude(half, 1100.f));
 }
 
+// Filters a sine of the given frequency (amplitude 0.25); returns the last 0.5 s
+static std::vector<float> FilterSine(float freq, float centre_hz, float q, float open) {
+    bitch::RadioFilter f;
+    f.Init(kSampleRate);
+    f.Set(centre_hz, q, open);
+    std::vector<float> out;
+    int n = (int)kSampleRate;
+    for (int t = 0; t < n; t++) {
+        float y = f.Process(0.25f * sinf(2 * kPi * freq * t / kSampleRate));
+        if (t >= n / 2) out.push_back(y);
+    }
+    return out;
+}
+
+// RMS of white noise (amplitude 0.25) through the filter
+static double FilterNoiseRms(float centre_hz, float q) {
+    bitch::RadioFilter f;
+    f.Init(kSampleRate);
+    f.Set(centre_hz, q, 0.f);
+    uint32_t seed = 7;
+    double sum = 0;
+    int n = (int)kSampleRate;
+    for (int t = 0; t < n; t++) {
+        seed = seed * 1664525u + 1013904223u;
+        float y = f.Process(((seed >> 8) / 8388608.f - 1.f) * 0.25f);
+        if (t >= n / 2) sum += y * y;
+    }
+    return sqrt(sum / (n / 2));
+}
+
+static void TestRadioFilter() {
+    // At the centre the level is the input times the make-up gain, (q / 0.7)^0.35
+    double makeup4 = pow(4.0 / 0.7, 0.35);
+    auto centre = FilterSine(1000.f, 1000.f, 4.f, 0.f);
+    CHECK(fabs(Magnitude(centre, 1000.f) / (0.25 * makeup4) - 1.0) < 0.1, "filter: centre gain %.3f",
+          Magnitude(centre, 1000.f) / 0.25);
+    // Two octaves away, at least 20 dB below the centre
+    auto high = FilterSine(4000.f, 1000.f, 4.f, 0.f);
+    auto low = FilterSine(250.f, 1000.f, 4.f, 0.f);
+    CHECK(Db(Magnitude(centre, 1000.f) / Magnitude(high, 4000.f)) > 20, "filter: 4 kHz only %.1f dB down",
+          Db(Magnitude(centre, 1000.f) / Magnitude(high, 4000.f)));
+    CHECK(Db(Magnitude(centre, 1000.f) / Magnitude(low, 250.f)) > 20, "filter: 250 Hz only %.1f dB down",
+          Db(Magnitude(centre, 1000.f) / Magnitude(low, 250.f)));
+    // Fully open = bypassed
+    auto open = FilterSine(4000.f, 1000.f, 4.f, 1.f);
+    CHECK(fabs(Magnitude(open, 4000.f) - 0.25) < 0.0025, "filter open: 4 kHz %.4f", Magnitude(open, 4000.f));
+    // Narrowing doesn't drop the level of a broadband signal by more than 6 dB
+    double narrow = FilterNoiseRms(1000.f, 12.f), wide = FilterNoiseRms(1000.f, 0.7f);
+    CHECK(fabs(Db(narrow / wide)) < 6, "filter: Q 12 vs 0.7 noise level %.1f dB", Db(narrow / wide));
+}
+
+// Sweeping the centre every block at maximum resonance stays finite and bounded
+static void TestRadioFilterSweepStable() {
+    bitch::RadioFilter f;
+    f.Init(kSampleRate);
+    uint32_t seed = 3;
+    float peak = 0.f;
+    bool finite = true;
+    for (int b = 0; b < 2000; b++) {
+        float centre = 150.f * powf(5000.f / 150.f, (b % 200) / 199.f);
+        f.Set(centre, 12.f, 0.f);
+        for (int k = 0; k < 48; k++) {
+            seed = seed * 1664525u + 1013904223u;
+            float y = f.Process(((seed >> 8) / 8388608.f - 1.f) * 0.5f);
+            finite = finite && std::isfinite(y);
+            peak = std::max(peak, fabsf(y));
+        }
+    }
+    CHECK(finite, "filter sweep: non-finite output");
+    CHECK(peak < 8.f, "filter sweep: peak %.2f", peak);
+}
+
 int main() {
     TestSoftClip();
     TestHilbertQuadrature();
@@ -276,6 +349,8 @@ int main() {
     TestEngineNaNTune();
     TestEngineMonoSum();
     TestRingMod();
+    TestRadioFilter();
+    TestRadioFilterSweepStable();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }
