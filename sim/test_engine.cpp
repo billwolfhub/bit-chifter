@@ -11,6 +11,7 @@
 #include "mapping.h"
 #include "radio_filter.h"
 #include "ring_mod.h"
+#include "fading.h"
 #include "drive.h"
 #include "random.h"
 #include <algorithm>
@@ -666,6 +667,53 @@ static void TestDrive() {
     CHECK(peak < 0.3f, "drive 1: level not compensated, peak %.3f", peak);
 }
 
+static void TestFading() {
+    const float block_rate = kSampleRate / 48.f;
+    bitch::Fading off;
+    off.Init(kSampleRate, block_rate, 101);
+    bool identical = true;
+    for (int b = 0; b < 1000; b++) {
+        off.Update(0.f);
+        for (int k = 0; k < 48; k++) {
+            float x = 0.25f * sinf(0.13f * (b * 48 + k));
+            identical = identical && off.Process(x) == x;
+        }
+    }
+    CHECK(identical, "fading 0: not a pass-through");
+
+    // Full depth on a 1 kHz sine for 30 s: 50 ms windows must dip well below and swell
+    // close to the input level, and stay bounded
+    bitch::Fading f;
+    f.Init(kSampleRate, block_rate, 101);
+    float lo_db = 0.f, hi_db = -100.f, peak = 0.f;
+    bool finite = true;
+    double sum = 0;
+    int count = 0;
+    for (int b = 0; b < (int)(30 * block_rate); b++) {
+        f.Update(1.f);
+        for (int k = 0; k < 48; k++) {
+            float y = f.Process(0.25f * sinf(2 * kPi * 1000.f * (b * 48 + k) / kSampleRate));
+            finite = finite && std::isfinite(y);
+            peak = std::max(peak, fabsf(y));
+            sum += y * y;
+            count++;
+        }
+        if (count >= 2400) { // 50 ms
+            float db = 20.f * log10f(sqrtf((float)(sum / count)) / (0.25f * 0.7071f) + 1e-9f);
+            if (b > block_rate) { // after the first second
+                lo_db = std::min(lo_db, db);
+                hi_db = std::max(hi_db, db);
+            }
+            sum = 0;
+            count = 0;
+        }
+    }
+    CHECK(finite, "fading 1: non-finite output");
+    CHECK(lo_db < -10.f, "fading 1: deepest dip only %.1f dB", lo_db);
+    CHECK(hi_db > -4.f, "fading 1: never swells back, best %.1f dB", hi_db);
+    CHECK(peak < 0.45f, "fading 1: peak %.3f", peak); // gain <= 1, echo comb up to +4 dB: 0.25 * 1.6 = 0.4
+}
+
 int main() {
     TestSoftClip();
     TestHilbertQuadrature();
@@ -695,6 +743,7 @@ int main() {
     TestRadioFilterSweepStable();
     TestMappings();
     TestBlips();
+    TestFading();
     TestDrive();
     TestWander();
     if (failures == 0) printf("All tests passed\n");
