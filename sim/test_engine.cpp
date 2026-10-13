@@ -15,6 +15,7 @@
 #include "static_noise.h"
 #include "fading.h"
 #include "drive.h"
+#include "detents.h"
 #include "random.h"
 #include <algorithm>
 #include <cstdint>
@@ -1026,7 +1027,33 @@ static void TestEngineReceptionReturnsClean() {
           Db(Magnitude(l, 1100.f) / Magnitude(fl, 1100.f)));
 }
 
+static void TestSoftQuantize() {
+    // Off: unchanged
+    CHECK(bitch::SoftQuantize(37.f, 120.f, 0.f) == 37.f, "detents off: changed");
+    CHECK(bitch::SoftQuantize(37.f, 0.f, 0.7f) == 37.f, "detents, no pitch: changed");
+    // Multiples of the pitch stay put
+    for (int k = -3; k <= 3; k++) {
+        float s = 120.f * k;
+        CHECK(fabsf(bitch::SoftQuantize(s, 120.f, 0.7f) - s) < 1e-3f, "detents: %g Hz moved to %g", s,
+              bitch::SoftQuantize(s, 120.f, 0.7f));
+    }
+    // Near a multiple, pulled towards it (but not past it)
+    float a = bitch::SoftQuantize(10.f, 120.f, 0.7f), b = bitch::SoftQuantize(110.f, 120.f, 0.7f);
+    CHECK(a > 0.f && a < 10.f, "detents: 10 Hz -> %g (want 0..10)", a);
+    CHECK(b > 110.f && b < 120.f, "detents: 110 Hz -> %g (want 110..120)", b);
+    // Continuous and increasing, so a sweep passes straight through
+    float prev = bitch::SoftQuantize(-500.f, 120.f, 0.7f);
+    bool increasing = true;
+    for (float s = -499.9f; s <= 500.f; s += 0.1f) {
+        float v = bitch::SoftQuantize(s, 120.f, 0.7f);
+        increasing = increasing && v > prev;
+        prev = v;
+    }
+    CHECK(increasing, "detents: not increasing through a sweep");
+}
+
 int main() {
+    TestSoftQuantize();
     TestSoftClip();
     TestHilbertQuadrature();
     TestShiftUpAndDown();
