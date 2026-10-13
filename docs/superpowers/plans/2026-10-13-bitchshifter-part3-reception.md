@@ -433,16 +433,19 @@ static void TestStaticNoise() {
     s.Update(1.f);
     double sum = 0;
     float peak = 0.f;
-    int crackles = 0;
-    bool above = false;
+    // A crackle = above 0.15 at least 5 ms after the last one (a decaying crackle riding on
+    // hiss crosses 0.15 several times; hiss alone peaks at 0.12)
+    int crackles = 0, since_last = 1 << 30;
     int n = 10 * (int)kSampleRate;
     for (int t = 0; t < n; t++) {
         float v = s.Process();
         sum += v * v;
         peak = std::max(peak, fabsf(v));
-        bool now_above = fabsf(v) > 0.15f;
-        if (now_above && !above) crackles++;
-        above = now_above;
+        since_last++;
+        if (fabsf(v) > 0.15f && since_last >= 240) {
+            crackles++;
+            since_last = 0;
+        }
     }
     float rms = sqrtf((float)(sum / n));
     CHECK(rms > 0.01f && rms < 0.15f, "static 1: rms %.4f", rms);
