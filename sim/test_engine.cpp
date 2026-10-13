@@ -1667,6 +1667,22 @@ static void TestPadPages() {
           pp.Effects());
 }
 
+static void TestLowBlip() {
+    bitch::Blips b;
+    b.Init(kSampleRate);
+    b.Start(1, true);
+    std::vector<float> x;
+    for (int n = 0; n < (int)(0.2f * kSampleRate); n++) x.push_back(b.Process());
+    auto beep = Window(x, 0.f, 0.06f);
+    CHECK(Magnitude(beep, 500.f) > 5 * Magnitude(beep, 1500.f), "low blip: 500 Hz %.4f vs 1500 Hz %.4f",
+          Magnitude(beep, 500.f), Magnitude(beep, 1500.f));
+    b.Start(1);
+    x.clear();
+    for (int n = 0; n < (int)(0.2f * kSampleRate); n++) x.push_back(b.Process());
+    beep = Window(x, 0.f, 0.06f);
+    CHECK(Magnitude(beep, 1500.f) > 5 * Magnitude(beep, 500.f), "normal blip after a low one: not 1500 Hz");
+}
+
 int main() {
     TestSoftQuantize();
     TestSoftClip();
@@ -1734,6 +1750,7 @@ int main() {
     TestEngineReverbNanRecovery();
     TestEffectsMapping();
     TestPadPages();
+    TestLowBlip();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }
