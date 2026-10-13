@@ -110,7 +110,7 @@ in doesn't click). **Movement between the sides** comes from:
    comes from the top 15% of MIX: the reverb return rises from 0 to −6 dB (relative to the
    signal), and the decay lengthens with it, ~1.2 s → ~3 s. Exact pass-through at amount 0
    (the reverb's state is still cleared, so turning it up never replays old sound).
-   Buffers (~60 KB) in SRAM or SDRAM; CPU budget ~3–6%.
+   Buffers (~145 KB) in SRAM; CPU budget ~3–6%.
 8. **Soft limiter** on the outputs.
 
 ## Code structure
