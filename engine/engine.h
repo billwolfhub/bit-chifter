@@ -118,6 +118,8 @@ class Engine {
     float squelch_decay_ = 0.f;      // per sample, ~150 ms
     bool squelch_was_on_ = false;
     Random squelch_noise_;
+    float spin_hz_ = 0.f;     // Dial spin: the dial's extra turn
+    float spin_return_ = 0.f; // per block, ~1 s (the dial coming back after a spin)
 };
 
 } // namespace bitch

@@ -95,6 +95,7 @@ void Engine::Reset() {
     fade_db_ = 0.f;
     squelch_tail_ = 0.f;
     squelch_was_on_ = false;
+    spin_hz_ = 0.f;
 }
 
 void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *out_r, size_t size,
@@ -110,6 +111,7 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
     if (block_glide_ == 0.f) {
         block_glide_ = 1.f - expf(-(float)size / (0.03f * sample_rate_));
         detent_release_ = 1.f - expf(-(float)size / (0.15f * sample_rate_));
+        spin_return_ = 1.f - expf(-(float)size / (1.f * sample_rate_));
         log2_filter_hz_ = log2f(Clamp(params.filter_hz, 150.f, 5000.f));
         filter_q_ = Clamp(params.filter_q, 0.7f, 12.f);
         filter_open_ = Clamp(params.filter_open, 0.f, 1.f);
@@ -186,7 +188,22 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
     // The pull's pitch follows the tracker only for a pitch at least as sure as the current
     // pull, so a weak (often wrong) estimate can't steer the detents while they release
     if (detent_target >= detent_amount_) detent_pitch_ = pitch_.Pitch();
-    target_shift_ = SoftQuantize(dial + hand_hz_, detent_pitch_, detent_amount_);
+    // Dial spin: the dial keeps turning, 150 Hz/s (amount 0.35) to 3000 Hz/s (amount 1),
+    // within +-2 kHz in all; after the pad is released it comes back in ~1 s. Both on: back.
+    float amount = Clamp(params.effect_amount, 0.35f, 1.f);
+    float spin_rate = 150.f + 2850.f * (amount - 0.35f) / 0.65f;
+    float spin_dir = (Has(fx, kSpinUp) ? 1.f : 0.f) - (Has(fx, kSpinDown) ? 1.f : 0.f);
+    if (spin_dir != 0.f) {
+        spin_hz_ += spin_dir * spin_rate * (float)size / sample_rate_;
+    } else {
+        spin_hz_ -= spin_return_ * spin_hz_;
+        if (fabsf(spin_hz_) < 0.01f) spin_hz_ = 0.f;
+    }
+    float turned = dial + hand_hz_;
+    // (turned can reach +-2150 with the tuning hand: clamp it for the limits, so they never cross)
+    float limit_turned = Clamp(turned, -2000.f, 2000.f);
+    spin_hz_ = Clamp(spin_hz_, -2000.f - limit_turned, 2000.f - limit_turned);
+    target_shift_ = SoftQuantize(turned + spin_hz_, detent_pitch_, detent_amount_);
 
     // The plate: idle (and skipped) at 0 or without a plate. While idle it is cleared in steps
     // (1024 floats a block, ~40 ms for all of it), and it starts again only once clean, so an

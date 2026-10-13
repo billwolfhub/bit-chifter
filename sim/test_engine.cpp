@@ -1921,6 +1921,52 @@ static void TestEffectSquelch() {
     CHECK(Rms(Window(l, 1.5f, 2.f)) > 0.15f, "squelch: the tone didn't come back (%g)", Rms(Window(l, 1.5f, 2.f)));
 }
 
+// Like ShiftTrace, with 8-sample blocks (the engine Init'ed with block size 8): the left side's
+// shifter frequency per 8-sample block, measurable to +-3000 Hz (ShiftTrace's 48: +-500 Hz)
+template <class Signal>
+static std::vector<float> ShiftTraceFine(bitch::Engine &e, const bitch::Params &p, float seconds, Signal signal) {
+    float in[8], out_l[8], out_r[8];
+    std::vector<float> trace;
+    float prev = e.ShifterPhase(0);
+    int blocks = (int)(seconds * kSampleRate / 8);
+    for (int b = 0; b < blocks; b++) {
+        for (int k = 0; k < 8; k++) in[k] = signal(b * 8 + k);
+        e.Process(in, in, out_l, out_r, 8, p);
+        float phase = e.ShifterPhase(0), d = phase - prev;
+        d -= floorf(d + 0.5f);
+        trace.push_back(d * kSampleRate / 8.f);
+        prev = phase;
+    }
+    return trace;
+}
+
+static void TestEffectSpins() {
+    auto silence = [](int) { return 0.f; };
+    bitch::Params p;
+    p.effect_amount = 1.f;
+    p.effects = bitch::Bit(bitch::kSpinUp);
+    bitch::Engine e;
+    e.Init(kSampleRate, 8);
+    auto up = ShiftTraceFine(e, p, 1.2f, silence);
+    CHECK(fabsf(up[3000] - 1500.f) < 150.f, "spin up: %.0f Hz after 0.5 s (want ~1500)", up[3000]);
+    CHECK(fabsf(up.back() - 2000.f) < 20.f, "spin up: %.0f Hz after 1.2 s (want the 2000 Hz limit)", up.back());
+    p.effects = 0u;
+    auto back = ShiftTraceFine(e, p, 5.f, silence);
+    CHECK(fabsf(back.back()) < 50.f, "spin up: %.0f Hz, 5 s after release", back.back());
+    bitch::Engine d;
+    d.Init(kSampleRate, 8);
+    p.effects = bitch::Bit(bitch::kSpinDown);
+    auto down = ShiftTraceFine(d, p, 0.6f, silence);
+    CHECK(fabsf(down[3000] + 1500.f) < 150.f, "spin down: %.0f Hz after 0.5 s (want ~-1500)", down[3000]);
+    bitch::Engine slow;
+    slow.Init(kSampleRate, 8);
+    p.effect_amount = 0.35f;
+    p.effects = bitch::Bit(bitch::kSpinUp);
+    auto gentle = ShiftTraceFine(slow, p, 1.f, silence);
+    CHECK(fabsf(gentle.back() - 150.f) < 20.f, "spin up at amount 0.35: %.0f Hz after 1 s (want ~150)",
+          gentle.back());
+}
+
 int main() {
     TestSoftQuantize();
     TestSoftClip();
@@ -2000,6 +2046,7 @@ int main() {
     TestEffectHoldDrift();
     TestEffectFadeOut();
     TestEffectSquelch();
+    TestEffectSpins();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }
