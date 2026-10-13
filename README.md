@@ -46,18 +46,26 @@ The blue triangles at the top corners aren't pads.
 Flash either with `make program-dfu` from its folder (RESET, then BOOT while the LED
 pulses), and read the output with `cat /dev/cu.usbmodem*`.
 
-## Part 1: playable shifter
+## Controls so far
 
 | Control | Does |
 |---|---|
 | Fader 1 TUNE | Shift −2500 … 0 (centre) … +2500 Hz, fine near the centre |
+| Knob 1 RING | Ring-mod amount |
+| Knob 2 CARRIER | Ring-mod carrier, 0.1 Hz (tremolo) – 5 kHz (bells) |
+| Knob 3 FILTER | Radio filter centre, 150 Hz – 5 kHz |
+| Knob 4 WIDTH | Radio filter: narrow and whistly → wide → fully open (from about 97% of the turn) |
 | Knob 5 FEEDBACK | Feedback 0–95% (barberpole) |
 | Knob 6 MIX | Dry/wet |
+| "TOU" logo pad | Stereo mode: 1 blip Linked, 2 Mirror, 3 Rotate (8 s) |
+
+Stereo in, stereo out; a mono source in one input feeds both sides at full level (a side
+counts as unused after 3 s of silence). CPU about 16–18% (part 2).
 
 Build and flash: `make`, then RESET, BOOT while the LED pulses, `make program-dfu`.
-Over USB serial (`cat /dev/cu.usbmodem*`), once a second: CPU load (about 10%), the
+Over USB serial (`cat /dev/cu.usbmodem*`), once a second: CPU load, the
 control values and the input/output peak levels.
-Mac tests: `sim/run_tests.sh`. Listen on the Mac: `sim/render.sh in.wav out.wav <tune_hz> [feedback] [mix]`.
+Mac tests: `sim/run_tests.sh`. Listen on the Mac: `sim/render.sh in.wav out.wav [tune=Hz] [fb=] [mix=] [ring=] [carrier=Hz] [filter=Hz] [q=] [open=] [stereo=linked|mirror|rotate]`.
 `leveltest/`: input DC/peak/audio levels over USB, with a test tone or passthrough on switch 1.
 
 **Cabling note:** the outputs are stereo on one TRS jack. Into balanced interface inputs,
