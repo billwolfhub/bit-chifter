@@ -1,6 +1,7 @@
 // Renders a 16-bit WAV through the Bitchshifter engine.
 // Usage: render in.wav out.wav [tune=Hz] [fb=0-0.95] [mix=0-1] [ring=0-1] [carrier=Hz]
-//                              [filter=Hz] [q=0.7-12] [open=0-1] [stereo=linked|mirror|rotate]
+//                              [filter=Hz] [q=0.7-12] [open=0-1] [reception=0-1]
+//                              [stereo=linked|mirror|rotate]
 // (defaults are the engine's: no shift, no ring mod, filter open, linked)
 #include <cstdio>
 #include <cstdlib>
@@ -26,7 +27,8 @@ static bool SetOption(bitch::Params &p, const char *arg) {
         float *field;
     } fields[] = {{"tune", &p.tune_hz},     {"fb", &p.feedback},        {"mix", &p.mix},
                   {"ring", &p.ring},        {"carrier", &p.carrier_hz}, {"filter", &p.filter_hz},
-                  {"q", &p.filter_q},       {"open", &p.filter_open}};
+                  {"q", &p.filter_q},       {"open", &p.filter_open},
+                  {"reception", &p.reception}};
     for (auto &f : fields) {
         if (strlen(f.name) == n && strncmp(arg, f.name, n) == 0) {
             *f.field = (float)atof(value);
@@ -40,7 +42,7 @@ int main(int argc, char **argv) {
     if (argc < 3) {
         fprintf(stderr,
                 "Usage: %s in.wav out.wav [tune=] [fb=] [mix=] [ring=] [carrier=] [filter=] [q=] [open=] "
-                "[stereo=linked|mirror|rotate]\n",
+                "[reception=] [stereo=linked|mirror|rotate]\n",
                 argv[0]);
         return 1;
     }
@@ -70,8 +72,8 @@ int main(int argc, char **argv) {
         return 1;
     }
     static const char *modes[3] = {"linked", "mirror", "rotate"};
-    printf("Wrote %s (tune %g fb %g mix %g ring %g carrier %g filter %g q %g open %g stereo %s)\n", argv[2],
-           p.tune_hz, p.feedback, p.mix, p.ring, p.carrier_hz, p.filter_hz, p.filter_q, p.filter_open,
+    printf("Wrote %s (tune %g fb %g mix %g ring %g carrier %g filter %g q %g open %g reception %g stereo %s)\n", argv[2],
+           p.tune_hz, p.feedback, p.mix, p.ring, p.carrier_hz, p.filter_hz, p.filter_q, p.filter_open, p.reception,
            modes[(int)p.stereo_mode]);
     return 0;
 }
