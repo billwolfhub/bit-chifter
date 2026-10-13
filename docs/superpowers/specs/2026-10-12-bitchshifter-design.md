@@ -71,13 +71,24 @@ envelope follower). Local project only (`~/local_files/daisy/bitchshifter`).
 ## Signal chain (per sample, 48 kHz, block 48)
 
 ```
-IN L+R (summed to mono) → Drive → Ring mod → Frequency shifter ⟲ feedback → Radio filter
-  → Reception (fading · static · AGC) → Mix with dry → soft limiter → OUT L / OUT R
+IN L, IN R → (mono detection) → per side: Drive → Ring mod → Frequency shifter ⟲ feedback
+  → Radio filter → Reception (fading · static · AGC) → Mix with dry → soft limiter → OUT L / OUT R
 ```
 
-The input is summed to mono so mono sources work on either jack. **Stereo comes from
-the receiver:** from the shifter on, L and R are processed by separate instances whose
-shift drift and fading wander independently (shared controls, different random paths).
+**True stereo:** each side has its own chain with shared controls, so a stereo source
+keeps its image. **Mono detection:** if one input is silent (a mono cable or one side
+unused), the other input feeds both chains at full level (smoothed, ~50 ms, so plugging
+in doesn't click). **Movement between the sides** comes from:
+- **Drift** (part of RECEPTION): each side's shift wanders on its own random path.
+- **Stereo mode** (tap the "TOU" logo pad to cycle; one, two or three confirmation blips):
+  - **Linked:** both sides use the same shift.
+  - **Mirror:** left gets the shift, right the opposite (TUNE at the centre = both
+    unshifted; moving it spreads the sides apart in opposite directions).
+  - **Rotate:** over a fixed 8 s cycle, the two sides' shifts sweep through each other
+    (left from +shift to −shift while right goes the other way) and the processed pair
+    circles from left to right.
+- The "CH" logo pad is reserved for a later carrier input mode (IN L = audio, IN R =
+  external ring-mod / single-sideband carrier, chosen deliberately, not auto-detected).
 
 1. **Drive:** `tanh`-style soft clip, gain 0 → +24 dB (from RECEPTION, 0 dB at its bottom).
 2. **Ring mod:** `out = in × (1 − a) + in × carrier × a`, sine carrier from a phase
@@ -158,4 +169,5 @@ bitchshifter/
 
 ## Out of scope (for now)
 
-MIDI, CV, a screen UI, presets beyond the 12 stations, external carrier input, reverb.
+MIDI, CV, a screen UI, presets beyond the 12 stations, reverb. The external carrier input mode
+(CH pad) is planned but not yet designed in detail.
