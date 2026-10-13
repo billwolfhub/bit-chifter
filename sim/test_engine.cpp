@@ -1452,6 +1452,132 @@ static void TestEngineReverbStable() {
     CHECK(finite, "reverb stress: non-finite output");
 }
 
+static void TestDelayLine() {
+    static bitch::DelayLine<100> line;
+    line.Clear();
+    line.Write(1.f);
+    for (int n = 0; n < 9; n++) line.Write(0.f);
+    // Ten writes since the impulse's: it is the 10th newest
+    bool only_at_10 = true;
+    for (int d = 1; d <= 100; d++) only_at_10 = only_at_10 && line.Tap(d) == (d == 10 ? 1.f : 0.f);
+    CHECK(only_at_10, "delay line: the impulse isn't (only) at Tap(10)");
+    CHECK(line.Tap(9.5f) == 0.5f && line.Tap(10.5f) == 0.5f, "delay line: fractional taps %g %g (want 0.5)",
+          line.Tap(9.5f), line.Tap(10.5f));
+    CHECK(line.Tap(10.f) == 1.f, "delay line: Tap(10.f) = %g", line.Tap(10.f));
+}
+
+static void TestPlateReverbClearStep() {
+    static bitch::PlateReverb plate;
+    plate.Init(kSampleRate);
+    plate.SetDecay(1.f);
+    float ol, orr;
+    uint32_t seed = 3;
+    for (int n = 0; n < 48000; n++) {
+        seed = seed * 1664525u + 1013904223u;
+        plate.Process(((seed >> 8) / 8388608.f - 1.f) * 0.5f, 0.f, ol, orr);
+    }
+    int steps = 0, most = 0, total = 0;
+    bool clean = false;
+    while (!clean && steps < 1000) {
+        clean = plate.ClearStep(1024);
+        steps++;
+        most = std::max(most, plate.LastCleared());
+        total += plate.LastCleared();
+    }
+    int want = (bitch::PlateReverb::TotalSamples() + 1023) / 1024;
+    CHECK(clean && steps == want, "plate: ClearStep took %d steps (want %d)", steps, want);
+    CHECK(most <= 1024, "plate: ClearStep zeroed %d floats in one call (max 1024)", most);
+    CHECK(total == bitch::PlateReverb::TotalSamples(), "plate: ClearStep zeroed %d floats of %d", total,
+          bitch::PlateReverb::TotalSamples());
+    float peak = 0.f;
+    for (int n = 0; n < 48000; n++) {
+        plate.Process(0.f, 0.f, ol, orr);
+        peak = std::max(peak, std::max(fabsf(ol), fabsf(orr)));
+    }
+    CHECK(peak == 0.f, "plate: %g after ClearStep() finished", peak);
+}
+
+// Reverb flipped on and off every 20 ms (MIX hovering at the reverb's threshold), on a tone
+static void TestEngineReverbFlicker() {
+    static bitch::Engine e;
+    static bitch::PlateReverb plate;
+    e.Init(kSampleRate, 48, &plate);
+    bitch::Params p;
+    float in[48], out_l[48], out_r[48];
+    bool finite = true;
+    int n = 0;
+    auto run = [&](float seconds, float level, bool flicker, float reverb) {
+        float peak = 0.f;
+        for (int b = 0; b < (int)(seconds * kSampleRate / 48); b++) {
+            p.reverb = flicker ? ((b / 20) % 2 == 0 ? 1.f : 0.f) : reverb;
+            for (int k = 0; k < 48; k++, n++) in[k] = level * sinf(2 * kPi * 440.f * n / kSampleRate);
+            e.Process(in, in, out_l, out_r, 48, p);
+            for (int k = 0; k < 48; k++) {
+                finite = finite && std::isfinite(out_l[k]) && std::isfinite(out_r[k]);
+                peak = std::max(peak, std::max(fabsf(out_l[k]), fabsf(out_r[k])));
+            }
+        }
+        return peak;
+    };
+    run(2.f, 0.3f, true, 0.f);
+    run(0.5f, 0.f, false, 0.f);
+    float replay = run(0.5f, 0.f, false, 1.f);
+    CHECK(finite, "reverb flicker: non-finite output");
+    CHECK(replay < 1e-5f, "reverb flicker: the old tail replayed (%g)", replay);
+}
+
+// At reverb 0 a plate changes nothing: bit-exact with an engine that has none
+static void TestEngineReverbOffBitExact() {
+    static bitch::Engine with, without;
+    static bitch::PlateReverb plate;
+    with.Init(kSampleRate, 48, &plate);
+    without.Init(kSampleRate);
+    bitch::Params p;
+    p.feedback = 0.8f;
+    p.reception = 0.5f;
+    p.tune_hz = 120.f;
+    p.ring = 0.3f;
+    uint32_t seed = 9;
+    float in_l[48], in_r[48], a_l[48], a_r[48], b_l[48], b_r[48];
+    bool same = true;
+    int n = 0;
+    for (int b = 0; b < (int)(3 * kSampleRate / 48); b++) {
+        for (int k = 0; k < 48; k++, n++) {
+            seed = seed * 1664525u + 1013904223u;
+            float noise = ((seed >> 8) / 8388608.f - 1.f) * 0.1f;
+            in_l[k] = 0.3f * sinf(2 * kPi * 330.f * n / kSampleRate) + noise;
+            in_r[k] = 0.2f * sinf(2 * kPi * 220.f * n / kSampleRate) - noise;
+        }
+        with.Process(in_l, in_r, a_l, a_r, 48, p);
+        without.Process(in_l, in_r, b_l, b_r, 48, p);
+        for (int k = 0; k < 48; k++) same = same && a_l[k] == b_l[k] && a_r[k] == b_r[k];
+    }
+    CHECK(same, "reverb 0: output differs with a plate");
+}
+
+// NaN recovery: the plate (which had sound, and maybe the NaN) gives no stale tail once it restarts
+static void TestEngineReverbNanRecovery() {
+    static bitch::Engine e;
+    static bitch::PlateReverb plate;
+    e.Init(kSampleRate, 48, &plate);
+    bitch::Params p;
+    p.reverb = 1.f;
+    float in[48], out_l[48], out_r[48];
+    for (int b = 0; b < (int)(0.5f * kSampleRate / 48); b++) {
+        for (int k = 0; k < 48; k++) in[k] = 0.3f * sinf(2 * kPi * 440.f * (b * 48 + k) / kSampleRate);
+        e.Process(in, in, out_l, out_r, 48, p);
+    }
+    for (float &v : in) v = NAN;
+    e.Process(in, in, out_l, out_r, 48, p);
+    for (float &v : in) v = 0.f;
+    float peak = 0.f;
+    for (int b = 0; b < (int)(0.5f * kSampleRate / 48); b++) {
+        e.Process(in, in, out_l, out_r, 48, p);
+        for (int k = 0; k < 48; k++) peak = std::max(peak, std::max(fabsf(out_l[k]), fabsf(out_r[k])));
+    }
+    CHECK(std::isfinite(peak) && peak < 1e-5f, "reverb after a NaN: %g (stale tail)", peak);
+}
+
 int main() {
     TestSoftQuantize();
     TestSoftClip();
@@ -1512,6 +1638,11 @@ int main() {
     TestPlateReverbClear();
     TestEngineReverb();
     TestEngineReverbStable();
+    TestDelayLine();
+    TestPlateReverbClearStep();
+    TestEngineReverbFlicker();
+    TestEngineReverbOffBitExact();
+    TestEngineReverbNanRecovery();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }

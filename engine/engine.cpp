@@ -50,6 +50,7 @@ void Engine::Init(float sample_rate, size_t block_size, PlateReverb *plate) {
     take_glide_ = 1.f - expf(-1.f / (0.05f * sample_rate));
     rotate_step_ = 1.f / (8.f * sample_rate);
     Reset();
+    plate_clean_ = true; // plate_->Init() has just cleared it in full (outside the audio callback)
 }
 
 void Engine::Reset() {
@@ -81,9 +82,11 @@ void Engine::Reset() {
     detent_pitch_ = 0.f;
     target_shift_ = 0.f;
     pitch_.Reset();
-    if (plate_) plate_->Clear();
+    // The plate isn't cleared here (too much for one callback: this is also the NaN recovery);
+    // it is cleared in steps over the next blocks, before it can start again
     reverb_ = 0.f;
     plate_running_ = false;
+    plate_clean_ = false;
 }
 
 void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *out_r, size_t size,
@@ -145,16 +148,16 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
     if (detent_target >= detent_amount_) detent_pitch_ = pitch_.Pitch();
     target_shift_ = SoftQuantize(dial + hand, detent_pitch_, detent_amount_);
 
-    // The plate: idle (and skipped) at 0 or without a plate; cleared when it starts again, so an
-    // old tail never replays (plate_-> is only reached while plate_running_, which needs a plate)
+    // The plate: idle (and skipped) at 0 or without a plate. While idle it is cleared in steps
+    // (1024 floats a block, ~40 ms for all of it), and it starts again only once clean, so an
+    // old tail never replays (until then reverb_ stays at 0, and the glide starts from there)
     float reverb = plate_ ? Clamp(params.reverb, 0.f, 1.f) : 0.f;
-    if (reverb > 0.f && !plate_running_) {
-        plate_->Clear();
-        plate_running_ = true;
-    }
-    if (reverb == 0.f && reverb_ < 1e-4f) {
+    if (plate_ && !plate_running_ && !plate_clean_) plate_clean_ = plate_->ClearStep(1024);
+    if (reverb > 0.f && !plate_running_ && plate_clean_) plate_running_ = true;
+    if (plate_running_ && reverb == 0.f && reverb_ < 1e-4f) {
         reverb_ = 0.f;
         plate_running_ = false;
+        plate_clean_ = false;
     }
     if (plate_running_) plate_->SetDecay(reverb_);
 

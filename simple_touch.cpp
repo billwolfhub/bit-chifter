@@ -30,7 +30,10 @@ const int kPadStereoMode = 10; // "TOU" of the TOUCH logo
 DaisySeed hw;
 AnalogControl controls[8];
 bitch::Engine engine;
-DSY_SDRAM_BSS bitch::PlateReverb plate; // ~145 KB: too big for DTCM (where globals go); Init() clears it (uninitialised SDRAM holds NaNs)
+// ~145 KB: too big for DTCM (where globals go); Init() clears it (uninitialised SDRAM holds NaNs).
+// PlateReverb/DelayLine must stay constant-initialisable (no user constructors): global
+// constructors run before hw.Init() sets up the SDRAM.
+DSY_SDRAM_BSS bitch::PlateReverb plate;
 CpuLoadMeter cpu;
 Mpr121I2C pads;
 bitch::Blips blips;
@@ -104,6 +107,7 @@ int main(void) {
     // Flush denormals to zero: the feedback loop can otherwise settle into a tiny
     // subnormal limit cycle after silence
     __set_FPSCR(__get_FPSCR() | (1u << 24));
+    FPU->FPDSCR |= FPU_FPDSCR_FZ_Msk; // the audio interrupt's FP context starts from FPDSCR, not FPSCR
     engine.Init(hw.AudioSampleRate(), hw.AudioBlockSize(), &plate); // after hw.Init (which sets up the SDRAM)
     cpu.Init(hw.AudioSampleRate(), hw.AudioBlockSize());
     Mpr121I2C::Config pad_config;

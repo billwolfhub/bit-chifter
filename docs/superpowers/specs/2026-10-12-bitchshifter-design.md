@@ -109,7 +109,8 @@ in doesn't click). **Movement between the sides** comes from:
    Fed by the mixed output (so dry, Freeze and Loop are reverberated too). Its amount
    comes from the top 15% of MIX: the reverb return rises from 0 to −6 dB (relative to the
    signal), and the decay lengthens with it, ~1.2 s → ~3 s. Exact pass-through at amount 0
-   (the reverb's state is still cleared, so turning it up never replays old sound).
+   (while idle, the reverb's state is cleared in small steps in the background, ~40 ms, and it
+   only restarts once clean, so turning it up never replays old sound).
    Buffers (~145 KB) in SDRAM (the engine stays in DTCM); CPU budget ~3–6%.
 8. **Soft limiter** on the outputs.
 

@@ -5,7 +5,11 @@
 namespace bitch {
 
 // A fixed-length delay line: Write() one sample, Tap(d) reads the sample written d
-// writes ago (1 = the newest, N = the oldest).
+// writes ago (1 = the newest, N = the oldest), for 1 <= d <= N. Note that a Write()
+// followed by Tap(N) reads the sample written N - 1 samples before it (the oldest slot
+// was just overwritten); harmless, since every line here is tapped at most at N.
+// Stays constant-initialisable (no user constructor): the firmware keeps it in SDRAM,
+// which is set up only after global constructors have run.
 template <int N>
 class DelayLine {
   public:
@@ -13,6 +17,15 @@ class DelayLine {
         for (float &v : buffer_) v = 0.f;
         position_ = 0;
     }
+    // Zeroes up to `count` samples from index `from`; returns how many it zeroed. Zeroing the
+    // end also rewinds the line, so a full pass of ClearPart() leaves it as Clear() does.
+    int ClearPart(int from, int count) {
+        int end = from + count < N ? from + count : N;
+        for (int i = from; i < end; i++) buffer_[i] = 0.f;
+        if (end == N) position_ = 0;
+        return end > from ? end - from : 0;
+    }
+    int Size() const { return N; }
     void Write(float x) {
         buffer_[position_] = x;
         if (++position_ == N) position_ = 0;
@@ -53,9 +66,16 @@ class PlateReverb {
         Clear();
     }
 
-    // amount 0-1: decay ~1.2 s -> ~3 s
-    void SetDecay(float amount) { decay_ = 0.35f + 0.3f * fminf(fmaxf(amount, 0.f), 1.f); }
+    // amount 0-1: decay ~1.2 s -> ~3 s (0.65 measured an RT60 of 2.70 s at amount 1, so 0.68)
+    void SetDecay(float amount) { decay_ = 0.35f + 0.33f * fminf(fmaxf(amount, 0.f), 1.f); }
 
+    // The whole plate's buffers, in floats (~145 KB)
+    static int TotalSamples() {
+        return kPredelay + kIn1 + kIn2 + kIn3 + kIn4 + 2 * (kExcursion + 2) + kLeftAp1 + kLeftD1 + kLeftAp2 +
+               kLeftD2 + kRightAp1 + kRightD1 + kRightAp2 + kRightD2;
+    }
+
+    // Full clear (for Init: it touches all ~145 KB at once, too long for the audio callback)
     void Clear() {
         predelay_.Clear();
         in1_.Clear();
@@ -70,12 +90,33 @@ class PlateReverb {
         right_d1_.Clear();
         right_ap2_.Clear();
         right_d2_.Clear();
-        low_ = high_ = 0.f;
-        left_damp_ = right_damp_ = 0.f;
-        left_end_ = right_end_ = 0.f;
-        lfo_sin_ = 0.f;
-        lfo_cos_ = 1.f;
+        ResetState();
+        clear_line_ = clear_from_ = 0;
     }
+
+    // Incremental clear, for the audio callback while the plate is idle: zeroes up to `samples`
+    // floats per call, across the lines in order, and resets the filters and the LFO when it has
+    // done them all. Returns true once the plate is clean (the next call starts a new pass).
+    // Don't Process() between the calls of a pass.
+    bool ClearStep(int samples) {
+        last_cleared_ = 0;
+        while (samples > 0 && clear_line_ < kLines) {
+            int size = 0;
+            int done = ClearLine(clear_line_, clear_from_, samples, size);
+            samples -= done;
+            last_cleared_ += done;
+            clear_from_ += done;
+            if (clear_from_ >= size) {
+                clear_line_++;
+                clear_from_ = 0;
+            }
+        }
+        if (clear_line_ < kLines) return false;
+        ResetState();
+        clear_line_ = clear_from_ = 0;
+        return true;
+    }
+    int LastCleared() const { return last_cleared_; } // test hook: floats zeroed by the last ClearStep()
 
     void Process(float in_l, float in_r, float &out_l, float &out_r) {
         // Band-limit the mono input, predelay it, diffuse it
@@ -129,7 +170,9 @@ class PlateReverb {
         kIn2 = 173,
         kIn3 = 611,
         kIn4 = 447,
-        kExcursion = 26, // the loop allpasses' wobble, in samples
+        // The loop allpasses' wobble, in samples: 0..26, i.e. +-13 around the centre, about half
+        // Dattorro's excursion (scaled); deliberately light, so sustained notes don't warble
+        kExcursion = 26,
         kLeftAp1 = 1084,
         kLeftD1 = 7182,
         kLeftAp2 = 2903,
@@ -139,6 +182,35 @@ class PlateReverb {
         kRightAp2 = 4284,
         kRightD2 = 5101,
     };
+
+    enum : int { kLines = 13 };
+
+    // Zeroes up to `count` samples of line `index` from `from`; returns how many, and the line's size
+    int ClearLine(int index, int from, int count, int &size) {
+        switch (index) {
+        case 0: size = predelay_.Size(); return predelay_.ClearPart(from, count);
+        case 1: size = in1_.Size(); return in1_.ClearPart(from, count);
+        case 2: size = in2_.Size(); return in2_.ClearPart(from, count);
+        case 3: size = in3_.Size(); return in3_.ClearPart(from, count);
+        case 4: size = in4_.Size(); return in4_.ClearPart(from, count);
+        case 5: size = left_ap1_.Size(); return left_ap1_.ClearPart(from, count);
+        case 6: size = left_d1_.Size(); return left_d1_.ClearPart(from, count);
+        case 7: size = left_ap2_.Size(); return left_ap2_.ClearPart(from, count);
+        case 8: size = left_d2_.Size(); return left_d2_.ClearPart(from, count);
+        case 9: size = right_ap1_.Size(); return right_ap1_.ClearPart(from, count);
+        case 10: size = right_d1_.Size(); return right_d1_.ClearPart(from, count);
+        case 11: size = right_ap2_.Size(); return right_ap2_.ClearPart(from, count);
+        default: size = right_d2_.Size(); return right_d2_.ClearPart(from, count);
+        }
+    }
+
+    void ResetState() {
+        low_ = high_ = 0.f;
+        left_damp_ = right_damp_ = 0.f;
+        left_end_ = right_end_ = 0.f;
+        lfo_sin_ = 0.f;
+        lfo_cos_ = 1.f;
+    }
 
     // Schroeder allpass on a delay line of length d (the line's last tap)
     template <int N>
@@ -172,6 +244,8 @@ class PlateReverb {
     float low_cut_ = 0.f, high_cut_ = 0.f, damping_ = 0.f, lfo_step_ = 0.f, decay_ = 0.35f;
     float low_ = 0.f, high_ = 0.f, left_damp_ = 0.f, right_damp_ = 0.f, left_end_ = 0.f, right_end_ = 0.f;
     float lfo_sin_ = 0.f, lfo_cos_ = 1.f;
+    int clear_line_ = 0, clear_from_ = 0; // ClearStep()'s cursor
+    int last_cleared_ = 0;
 };
 
 } // namespace bitch

@@ -103,7 +103,8 @@ class Engine {
     // The plate reverb, after the mix (fed by both sides, returning a wide stereo tail)
     PlateReverb *plate_ = nullptr; // optional; owned by the front end (the firmware keeps it in SDRAM)
     float reverb_ = 0.f;          // glided towards params.reverb
-    bool plate_running_ = false;  // false: the plate is idle (cleared before it starts again)
+    bool plate_running_ = false;  // false: the plate is idle (and cleared in steps before it starts again)
+    bool plate_clean_ = true;     // the idle plate's buffers are all zero (it may start)
 };
 
 } // namespace bitch
