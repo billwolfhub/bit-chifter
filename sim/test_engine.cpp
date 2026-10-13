@@ -20,6 +20,7 @@
 #include "pitch_tracker.h"
 #include "random.h"
 #include "plate_reverb.h"
+#include "../ui/pad_pages.h"
 #include "effects.h"
 #include <algorithm>
 #include <cstdint>
@@ -1604,6 +1605,68 @@ static void TestEffectsMapping() {
           "effect amount %.3f %.3f", EffectAmount(0.f), EffectAmount(1.f));
 }
 
+static void TestPadPages() {
+    using namespace bitch;
+    PadPages pp;
+    uint32_t t = 1000;
+    auto step = [&](uint32_t ms, uint32_t touched, int page) {
+        t += ms;
+        pp.Update(t, touched, page);
+    };
+    // A tap latches; another tap unlatches; the effect starts at the touch
+    step(10, 1u << 4, 0);
+    CHECK(pp.Effects() == Bit(kEchoes), "tap: not on at the touch (%08x)", pp.Effects());
+    step(100, 0, 0);
+    CHECK(pp.Effects() == Bit(kEchoes) && pp.Latched() == Bit(kEchoes), "tap: not latched (%08x)", pp.Effects());
+    step(10, 1u << 4, 0);
+    CHECK(pp.Effects() == Bit(kEchoes), "second tap: off at the touch");
+    step(100, 0, 0);
+    CHECK(pp.Effects() == 0, "second tap: still on (%08x)", pp.Effects());
+    // A hold is momentary
+    step(10, 1u << 8, 1);
+    CHECK(pp.Effects() == Bit(kFadeOut), "hold: not on (%08x)", pp.Effects());
+    step(500, 1u << 8, 1);
+    CHECK(pp.Effects() == Bit(kFadeOut), "hold: dropped while held");
+    step(10, 0, 1);
+    CHECK(pp.Effects() == 0, "hold: still on after release (%08x)", pp.Effects());
+    // Holding a latched effect turns it off at the release
+    step(10, 1u << 0, 2);
+    step(50, 0, 2);
+    CHECK(pp.Latched() == Bit(kRing100), "latch ring 100%%");
+    step(10, 1u << 0, 2);
+    step(400, 1u << 0, 2);
+    CHECK(pp.Effects() == Bit(kRing100), "hold on latched: off while held");
+    step(10, 0, 2);
+    CHECK(pp.Effects() == 0, "hold on latched: still on after release (%08x)", pp.Effects());
+    // Latches survive page changes; the same pad on another page is another effect
+    step(10, 1u << 6, 0);
+    step(50, 0, 0);
+    step(10, 0, 2);
+    CHECK(pp.Effects() == Bit(kSpiralUp), "page change dropped a latch (%08x)", pp.Effects());
+    step(10, 1u << 6, 2);
+    step(50, 0, 2);
+    CHECK(pp.Effects() == (Bit(kSpiralUp) | Bit(kStutter)), "two pages' latches (%08x)", pp.Effects());
+    // A held pad keeps the effect of the page it was touched on
+    step(10, 1u << 3, 0);
+    step(100, 1u << 3, 1);
+    CHECK(pp.Effects() == (Bit(kSpiralUp) | Bit(kStutter) | Bit(kReverseEchoes)), "held pad changed page (%08x)",
+          pp.Effects());
+    step(300, 0, 1);
+    CHECK(pp.Effects() == (Bit(kSpiralUp) | Bit(kStutter)), "held pad: still on after release (%08x)", pp.Effects());
+    // TOU tap: one stereo step, on the release
+    step(10, 1u << 10, 0);
+    CHECK(pp.TakeStereoSteps() == 0, "TOU: stepped at the touch");
+    step(100, 0, 0);
+    CHECK(pp.TakeStereoSteps() == 1 && !pp.TakeCleared(), "TOU tap: no stereo step");
+    // TOU hold 1 s: clears the latches (once), no stereo step; a held pad stays on
+    for (int i = 0; i < 110; i++) step(10, (1u << 10) | (1u << 5), 0);
+    CHECK(pp.TakeCleared() && !pp.TakeCleared(), "TOU hold: not cleared exactly once");
+    CHECK(pp.Latched() == 0 && pp.Effects() == Bit(kPingPongEchoes), "TOU hold: left %08x", pp.Effects());
+    step(10, 0, 0);
+    CHECK(pp.TakeStereoSteps() == 0 && pp.Effects() == 0, "TOU hold: stepped the stereo mode, or left %08x",
+          pp.Effects());
+}
+
 int main() {
     TestSoftQuantize();
     TestSoftClip();
@@ -1670,6 +1733,7 @@ int main() {
     TestEngineReverbOffBitExact();
     TestEngineReverbNanRecovery();
     TestEffectsMapping();
+    TestPadPages();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }
