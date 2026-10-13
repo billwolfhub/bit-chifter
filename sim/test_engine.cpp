@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <vector>
 
+#include "blips.h"
 #include "engine.h"
 #include "hilbert.h"
 #include "softclip.h"
@@ -472,6 +473,28 @@ static void TestEngineRotateShifts() {
     CHECK(Magnitude(w, 900.f) > 0.06, "rotate start: 900 Hz %.3f", Magnitude(w, 900.f));
 }
 
+// Start(n) plays n separate beeps, then silence
+static void TestBlips() {
+    for (int n = 1; n <= 3; n++) {
+        bitch::Blips b;
+        b.Init(kSampleRate);
+        b.Start(n);
+        // A burst = sound after at least 200 silent samples (the start counts as silence)
+        int bursts = 0, silent_run = 1000;
+        for (int t = 0; t < (int)kSampleRate; t++) {
+            float v = fabsf(b.Process());
+            if (v > 0.01f) {
+                if (silent_run >= 200) bursts++;
+                silent_run = 0;
+            } else {
+                silent_run++;
+            }
+        }
+        CHECK(bursts == n, "blips: Start(%d) gave %d bursts", n, bursts);
+        CHECK(fabsf(b.Process()) < 1e-6f, "blips: still sounding after 1 s");
+    }
+}
+
 int main() {
     TestSoftClip();
     TestHilbertQuadrature();
@@ -495,6 +518,7 @@ int main() {
     TestRadioFilter();
     TestRadioFilterSweepStable();
     TestMappings();
+    TestBlips();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }
