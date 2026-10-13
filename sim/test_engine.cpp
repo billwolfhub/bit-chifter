@@ -328,9 +328,23 @@ static void TestRadioFilterSweepStable() {
 static void TestMappings() {
     CHECK(bitch::TuneHz(0.5f) == 0.f, "tune centre %.2f", bitch::TuneHz(0.5f));
     CHECK(bitch::TuneHz(0.51f) == 0.f, "tune dead zone %.2f", bitch::TuneHz(0.51f));
-    CHECK(fabsf(bitch::TuneHz(1.f) - 2500.f) < 0.5f, "tune top %.1f", bitch::TuneHz(1.f));
-    CHECK(fabsf(bitch::TuneHz(0.f) + 2500.f) < 0.5f, "tune bottom %.1f", bitch::TuneHz(0.f));
-    CHECK(bitch::TuneHz(0.6f) > 0.f && bitch::TuneHz(0.6f) < 30.f, "tune fine near centre %.2f", bitch::TuneHz(0.6f));
+    CHECK(fabsf(bitch::TuneHz(1.f) - 2000.f) < 0.5f, "tune top %.1f", bitch::TuneHz(1.f));
+    CHECK(fabsf(bitch::TuneHz(0.f) + 2000.f) < 0.5f, "tune bottom %.1f", bitch::TuneHz(0.f));
+    CHECK(bitch::TuneHz(0.6f) > 80.f && bitch::TuneHz(0.6f) < 100.f, "tune fine zone %.2f", bitch::TuneHz(0.6f));
+    CHECK(fabsf(bitch::TuneHz(0.9f) - 398.f) < 3.f, "tune end of the fine zone %.1f", bitch::TuneHz(0.9f));
+    {
+        // Increasing all the way, with no flat spot or jump at the start of the swoop zone
+        float prev = bitch::TuneHz(0.f), max_jump = 0.f;
+        bool increasing = true;
+        for (int i = 1; i <= 1000; i++) {
+            float v = bitch::TuneHz(i / 1000.f);
+            increasing = increasing && v >= prev;
+            max_jump = std::max(max_jump, v - prev);
+            prev = v;
+        }
+        CHECK(increasing, "tune: not increasing");
+        CHECK(max_jump < 40.f, "tune: jumps %.1f Hz in a 0.1%% fader step", max_jump);
+    }
     CHECK(fabsf(bitch::CarrierHz(0.f) - 0.1f) < 0.001f, "carrier bottom %.3f", bitch::CarrierHz(0.f));
     CHECK(fabsf(bitch::CarrierHz(1.f) - 5000.f) < 1.f, "carrier top %.1f", bitch::CarrierHz(1.f));
     CHECK(fabsf(bitch::FilterHz(0.f) - 150.f) < 0.1f, "filter bottom %.1f", bitch::FilterHz(0.f));

@@ -7,14 +7,25 @@ namespace bitch {
 // Knob and fader positions (0-1) to engine parameters. Shared by the Simple Touch
 // front end, a future Patch front end and the tests.
 
-// Fader -> shift: -2500..+2500 Hz, 0 in a small dead zone at the centre, cubic so
-// it's fine near 0 and wild at the ends
+// Fader -> the SSB dial: 0 in a small dead zone at the centre; the middle 80% of the
+// travel is a fine, linear +-400 Hz (where mistuned sideband sweeps through its harmonic
+// "snaps"); the last 10% at each end accelerates to +-2000 Hz for big swoops. The slope
+// is continuous at the knee, so there's no flat spot.
 inline float TuneHz(float fader) {
-    const float kMaxShiftHz = 2500.f, kDeadZone = 0.02f;
+    const float kDeadZone = 0.02f, kFine = 0.8f, kFineHz = 400.f, kMaxHz = 2000.f;
+    const float slope = kFineHz / kFine;                                                    // Hz per unit, fine zone
+    const float curve = (kMaxHz - kFineHz - slope * (1.f - kFine)) / ((1.f - kFine) * (1.f - kFine));
     float x = 2.f * fader - 1.f;
     if (fabsf(x) < kDeadZone) return 0.f;
-    x = (x - copysignf(kDeadZone, x)) / (1.f - kDeadZone);
-    return kMaxShiftHz * x * x * x;
+    float m = fminf((fabsf(x) - kDeadZone) / (1.f - kDeadZone), 1.f);
+    float hz;
+    if (m <= kFine) {
+        hz = slope * m;
+    } else {
+        float d = m - kFine;
+        hz = kFineHz + slope * d + curve * d * d;
+    }
+    return copysignf(hz, x);
 }
 
 // Knob -> ring-mod carrier, 0.1 Hz (tremolo) to 5 kHz (bells), exponential
