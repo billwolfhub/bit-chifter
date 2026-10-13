@@ -829,19 +829,15 @@ static void TestBlips() {
         bitch::Blips b;
         b.Init(kSampleRate);
         b.Start(n);
-        int bursts = 0;
-        bool sounding = false;
-        int silent_run = 0;
+        // A burst = sound after at least 200 silent samples (the start counts as silence)
+        int bursts = 0, silent_run = 1000;
         for (int t = 0; t < (int)kSampleRate; t++) {
             float v = fabsf(b.Process());
             if (v > 0.01f) {
-                if (!sounding && silent_run > 200) bursts++;
-                if (!sounding && t == 0) bursts++;
-                sounding = true;
+                if (silent_run >= 200) bursts++;
                 silent_run = 0;
             } else {
                 silent_run++;
-                if (silent_run > 200) sounding = false;
             }
         }
         CHECK(bursts == n, "blips: Start(%d) gave %d bursts", n, bursts);
