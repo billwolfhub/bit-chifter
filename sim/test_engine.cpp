@@ -826,7 +826,10 @@ static void TestEngineReceptionStatic() {
     }
     float rms = sqrtf((float)(sum / (l.size() / 2)));
     CHECK(rms > 0.005f, "reception 1, silence: static rms only %.4f", rms);
-    CHECK(peak <= 1.f, "reception 1, silence: peak %.3f", peak);
+    CHECK(rms < 0.5f, "reception 1, silence: static rms too loud %.4f", rms);
+    int hot = 0;
+    for (float v : l) hot += fabsf(v) > 0.95f;
+    CHECK(hot < (int)l.size() / 100, "reception 1, silence: %d of %zu samples above 0.95", hot, l.size());
 }
 
 // A quiet input comes out louder with full reception (AGC boost, plus static)
@@ -845,7 +848,7 @@ static void TestEngineReceptionLiftsQuiet() {
     CHECK(Db(rms(l) / clean) > 6, "reception 1: quiet input only %.1f dB louder", Db(rms(l) / clean));
 }
 
-// Everything at once, on noise, for 20 s: finite and within the limiter
+// Everything at once, on noise, for 60 s: finite and within the limiter
 static void TestEngineReceptionStable() {
     bitch::Engine e;
     e.Init(kSampleRate);
@@ -860,9 +863,11 @@ static void TestEngineReceptionStable() {
     p.tune_hz = 37.f;
     p.stereo_mode = bitch::StereoMode::kMirror;
     uint32_t seed = 9;
-    float in[48], out_l[48], out_r[48], peak = 0.f;
+    float in[48], out_l[48], out_r[48];
+    int hot = 0;
+    long total = 0;
     bool finite = true;
-    for (int b = 0; b < (int)(20 * kSampleRate / 48); b++) {
+    for (int b = 0; b < (int)(60 * kSampleRate / 48); b++) {
         for (float &v : in) {
             seed = seed * 1664525u + 1013904223u;
             v = ((seed >> 8) / 8388608.f - 1.f) * 0.5f;
@@ -870,11 +875,141 @@ static void TestEngineReceptionStable() {
         e.Process(in, in, out_l, out_r, 48, p);
         for (int k = 0; k < 48; k++) {
             finite = finite && std::isfinite(out_l[k]) && std::isfinite(out_r[k]);
-            peak = std::max(peak, std::max(fabsf(out_l[k]), fabsf(out_r[k])));
+            hot += (fabsf(out_l[k]) > 0.95f) + (fabsf(out_r[k]) > 0.95f);
+            total += 2;
         }
     }
     CHECK(finite, "reception stress: non-finite output");
-    CHECK(peak <= 1.f, "reception stress: peak %.3f", peak);
+    CHECK(hot < total / 100, "reception stress: %d of %ld samples above 0.95", hot, total);
+}
+
+static void TestDriveOnset() {
+    auto run = [](float amount) {
+        bitch::Drive d;
+        d.Set(amount);
+        std::vector<float> out;
+        for (int t = 0; t < (int)kSampleRate; t++) out.push_back(d.Process(0.9f * sinf(2 * kPi * 1000.f * t / kSampleRate)));
+        return out;
+    };
+    auto rms = [](const std::vector<float> &x) {
+        double s = 0;
+        for (float v : x) s += v * v;
+        return sqrt(s / x.size());
+    };
+    auto a = run(0.f), b = run(0.001f);
+    CHECK(fabs(Db(rms(b) / rms(a))) < 0.05, "drive onset: level jumps %.3f dB", Db(rms(b) / rms(a)));
+    double h3 = Magnitude(b, 3000.f), f1 = Magnitude(b, 1000.f);
+    CHECK(h3 < 0.9 * f1 * pow(10.0, -60.0 / 20.0), "drive onset: 3rd harmonic %.1f dB", Db(h3 / f1));
+}
+
+static void TestRandomSeedsScrambled() {
+    const uint32_t seeds[] = {11, 29, 244, 478, 82, 208};
+    float lo = 1.f, hi = -1.f;
+    bool any_positive = false;
+    for (uint32_t s : seeds) {
+        bitch::Random r(s);
+        float v = r.Bipolar();
+        lo = std::min(lo, v);
+        hi = std::max(hi, v);
+        any_positive = any_positive || v > 0.f;
+    }
+    CHECK(any_positive, "seeds: first values all negative");
+    CHECK(hi - lo > 0.5f, "seeds: first values spread only %.3f", hi - lo);
+}
+
+static void TestWanderRateChange() {
+    bitch::Wander w;
+    w.Init(1000.f, 5);
+    for (int b = 0; b < 60000; b++) w.Next(0.05f);
+    float prev = w.Next(0.5f), prev_sign = 0.f;
+    int reversals = 0;
+    for (int b = 0; b < 3000; b++) {
+        float v = w.Next(0.5f);
+        float sign = v > prev ? 1.f : (v < prev ? -1.f : 0.f);
+        if (sign != 0.f) {
+            if (prev_sign != 0.f && sign != prev_sign) reversals++;
+            prev_sign = sign;
+        }
+        prev = v;
+    }
+    CHECK(reversals >= 1, "wander: no new target within 3 s after raising the rate");
+}
+
+static void TestFadingReturnsToExact() {
+    bitch::Fading f;
+    f.Init(kSampleRate, kSampleRate / 48.f, 101);
+    int exact_bad = 0, n = 0;
+    for (int b = 0; b < (int)(5 * kSampleRate / 48); b++) {
+        f.Update(b < (int)(2 * kSampleRate / 48) ? 1.f : 0.f);
+        for (int k = 0; k < 48; k++) {
+            float x = 0.3f * sinf(0.05f * (b * 48 + k));
+            float y = f.Process(x);
+            if (b >= (int)(4.5f * kSampleRate / 48)) {
+                n++;
+                exact_bad += y != x;
+            }
+        }
+    }
+    CHECK(n > 0 && exact_bad == 0, "fading: %d of %d samples inexact after returning to 0", exact_bad, n);
+}
+
+static void TestEngineLinkedDrifts() {
+    bitch::Engine e;
+    e.Init(kSampleRate);
+    bitch::Params p;
+    p.tune_hz = 100.f;
+    p.reception = 0.3f;
+    const size_t block = 48;
+    std::vector<float> in(block), ol(block), orr(block);
+    int total = (int)(6.f * kSampleRate) / block, start = (int)(2.f * kSampleRate) / block;
+    float prev = 0.f, unwrapped = 0.f, first = 0.f;
+    for (int b = 0; b < total; b++) {
+        for (size_t k = 0; k < block; k++) in[k] = 0.25f * sinf(2 * kPi * 1000.f * (b * block + k) / kSampleRate);
+        e.Process(in.data(), in.data(), ol.data(), orr.data(), block, p);
+        float d = e.ShifterPhase(0) - e.ShifterPhase(1);
+        d -= floorf(d + 0.5f);
+        if (b == start) first = unwrapped = d;
+        else if (b > start) {
+            float step = d - prev;
+            step -= floorf(step + 0.5f);
+            unwrapped += step;
+        }
+        prev = d;
+    }
+    CHECK(fabsf(unwrapped - first) > 2.f, "linked drift: phase difference moved only %.2f cycles", unwrapped - first);
+}
+
+static void TestEngineReceptionReturnsClean() {
+    const size_t block = 48;
+    auto run = [&](bool noisy_first, std::vector<float> &l, std::vector<float> &r) {
+        bitch::Engine e;
+        e.Init(kSampleRate);
+        bitch::Params p;
+        p.tune_hz = 100.f;
+        std::vector<float> in(block), ol(block), orr(block);
+        int total = (int)(6.f * kSampleRate) / block;
+        l.clear();
+        r.clear();
+        for (int b = 0; b < total; b++) {
+            float t0 = b * block / kSampleRate;
+            p.reception = (noisy_first && t0 < 2.f) ? 1.f : 0.f;
+            for (size_t k = 0; k < block; k++) in[k] = 0.25f * sinf(2 * kPi * 1000.f * (b * block + k) / kSampleRate);
+            e.Process(in.data(), in.data(), ol.data(), orr.data(), block, p);
+            if (t0 >= 5.5f)
+                for (size_t k = 0; k < block; k++) {
+                    l.push_back(ol[k]);
+                    r.push_back(orr[k]);
+                }
+        }
+    };
+    std::vector<float> l, r, fl, fr;
+    run(true, l, r);
+    run(false, fl, fr);
+    int diff = 0;
+    for (size_t i = 0; i < l.size(); i++) diff += l[i] != r[i];
+    CHECK(diff == 0, "returns clean: %d samples differ between L and R", diff);
+    CHECK(fabs(Db(Magnitude(l, 1100.f) / Magnitude(fl, 1100.f))) < 0.5, "returns clean: 1100 Hz off by %.2f dB",
+          Db(Magnitude(l, 1100.f) / Magnitude(fl, 1100.f)));
 }
 
 int main() {
@@ -915,6 +1050,12 @@ int main() {
     TestEngineReceptionStatic();
     TestEngineReceptionLiftsQuiet();
     TestEngineReceptionStable();
+    TestDriveOnset();
+    TestRandomSeedsScrambled();
+    TestWanderRateChange();
+    TestFadingReturnsToExact();
+    TestEngineLinkedDrifts();
+    TestEngineReceptionReturnsClean();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }

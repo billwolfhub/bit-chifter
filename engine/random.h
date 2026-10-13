@@ -10,7 +10,12 @@ class Random {
   public:
     explicit Random(uint32_t seed = 1) { Seed(seed); }
 
-    void Seed(uint32_t seed) { state_ = seed ? seed : 1u; }
+    void Seed(uint32_t seed) {
+        // Scramble so small or neighbouring seeds don't start with similar values
+        state_ = (seed * 2654435761u) ^ 0x9E3779B9u;
+        if (!state_) state_ = 1u;
+        for (int i = 0; i < 4; i++) Next();
+    }
 
     uint32_t Next() {
         state_ ^= state_ << 13;
@@ -35,15 +40,17 @@ class Wander {
         block_rate_ = block_rate;
         random_.Seed(seed);
         value_ = target_ = 0.f;
-        countdown_ = 0;
+        phase_ = 0.f;
     }
 
     float Next(float rate_hz) {
-        if (--countdown_ <= 0) {
+        float rate = fmaxf(rate_hz, 0.001f);
+        phase_ -= rate / block_rate_; // counts down in periods, so rate changes apply at once
+        if (phase_ <= 0.f) {
             target_ = random_.Bipolar();
-            countdown_ = 1 + (int)(block_rate_ / rate_hz * (0.5f + random_.Uniform()));
+            phase_ += 0.5f + random_.Uniform();
         }
-        value_ += (1.f - expf(-2.f * rate_hz / block_rate_)) * (target_ - value_);
+        value_ += (1.f - expf(-2.f * rate / block_rate_)) * (target_ - value_);
         return value_;
     }
 
@@ -51,7 +58,7 @@ class Wander {
     Random random_;
     float block_rate_ = 1000.f;
     float value_ = 0.f, target_ = 0.f;
-    int countdown_ = 0;
+    float phase_ = 0.f; // periods left until the next target
 };
 
 } // namespace bitch

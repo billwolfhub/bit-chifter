@@ -21,6 +21,9 @@ class StaticNoise {
         Update(0.f);
     }
 
+    // Clears the filter and crackle state (the RNG keeps running)
+    void Reset() { hiss_state_ = crackle_ = 0.f; }
+
     void Update(float level) {
         float l = fminf(fmaxf(level, 0.f), 1.f);
         hiss_level_ = 0.12f * l;

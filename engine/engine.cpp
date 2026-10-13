@@ -63,6 +63,7 @@ void Engine::Reset() {
     reception_ = 0.f;
     for (Fading &f : fading_) f.Reset();
     for (Agc &a : agc_) a.Reset();
+    for (StaticNoise &n : static_) n.Reset();
 }
 
 void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *out_r, size_t size,
@@ -119,10 +120,15 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
     } else {
         // Linked: keep the two oscillators in phase (they are left at an offset after Mirror/Rotate).
         // Pulling the right one gently (<1 Hz deviation) converges in ~100 ms and is inaudible.
-        // Scaled down by reception so the sides can wander.
-        float err = shifter_[0].Phase() - shifter_[1].Phase();
-        err -= floorf(err + 0.5f); // wrapped to -0.5..0.5
-        shifter_[1].NudgePhase(0.02f * (1.f - r) * err);
+        // The lock fades out as reception rises (gone above 0.05) so the sides can drift apart;
+        // it re-locks within ~100 ms once reception is back at 0.
+        float lock = 0.02f * fmaxf(1.f - r * 20.f, 0.f);
+        if (lock > 0.f) {
+            float err = shifter_[0].Phase() - shifter_[1].Phase();
+            err -= floorf(err + 0.5f); // wrapped to -0.5..0.5
+            // Within rounding of in-phase: close the gap fully, since 2% of it is below float resolution
+            shifter_[1].NudgePhase(fabsf(err) < 1e-5f ? err : lock * err);
+        }
     }
 
     for (size_t i = 0; i < size; i++) {

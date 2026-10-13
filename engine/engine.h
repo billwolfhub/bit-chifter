@@ -35,13 +35,15 @@ struct Params {
 // filter -> dry/wet -> soft clip, with shared controls. If one input is silent, the
 // other feeds both sides at full level.
 // Stereo modes: Linked (same shift both sides), Mirror (right gets the opposite shift),
+// Rotate (over 8 s the sides' shifts sweep through each other and the pair circles left to right).
 // Reception (0-1) adds, per side: drive -> ring mod -> shifter (+ its own drift, up to ±40 Hz) -> fading ->
 // + static -> radio filter -> AGC. At 0 every stage is an exact pass-through.
-// Rotate (over 8 s the sides' shifts sweep through each other and the pair circles left to right).
 class Engine {
   public:
     // block_size: the size every Process() call will use (the firmware and sim use 48)
     void Init(float sample_rate, size_t block_size = 48);
+    // Test hook: a side's shifter oscillator phase (0-1)
+    float ShifterPhase(int side) const { return shifter_[side].Phase(); }
     void Process(const float *in_l, const float *in_r, float *out_l, float *out_r, size_t size,
                  const Params &params);
 

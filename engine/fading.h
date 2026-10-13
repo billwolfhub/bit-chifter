@@ -47,6 +47,12 @@ class Fading {
         echo_ += glide_ * (echo_target_ - echo_);
         delay_ += glide_ * (delay_target_ - delay_);
         buffer_[position_] = x;
+        if (gain_target_ == 1.f && echo_target_ == 0.f && fabsf(gain_ - 1.f) < 1e-4f && fabsf(echo_) < 1e-4f) {
+            gain_ = 1.f; // settled back at depth 0: exact pass-through (buffer stays filled); 1e-4 (-80 dB) since the float glide stalls ~3e-5 short of 1
+            echo_ = 0.f;
+            position_ = (position_ + 1) & kMask;
+            return x;
+        }
         float read = (float)position_ - delay_;
         if (read < 0.f) read += (float)kSize;
         int i0 = (int)read;
