@@ -11,6 +11,7 @@
 #include "mapping.h"
 #include "radio_filter.h"
 #include "ring_mod.h"
+#include "random.h"
 #include <algorithm>
 #include <cstdint>
 
@@ -611,6 +612,28 @@ static void TestBlips() {
     }
 }
 
+// Wander stays in -1..1, covers most of the range, moves smoothly, and depends on its seed
+static void TestWander() {
+    bitch::Wander w, other;
+    w.Init(1000.f, 5);
+    other.Init(1000.f, 6);
+    float lo = 1.f, hi = -1.f, prev = 0.f, max_step = 0.f;
+    bool bounded = true, differs = false;
+    for (int b = 0; b < 100000; b++) { // 100 s of blocks at 1 kHz
+        float v = w.Next(0.5f);
+        bounded = bounded && v >= -1.f && v <= 1.f;
+        lo = std::min(lo, v);
+        hi = std::max(hi, v);
+        if (b > 0) max_step = std::max(max_step, fabsf(v - prev));
+        prev = v;
+        if (fabsf(v - other.Next(0.5f)) > 0.1f) differs = true;
+    }
+    CHECK(bounded, "wander: left -1..1");
+    CHECK(hi - lo > 1.f, "wander: only covered %.2f..%.2f", lo, hi);
+    CHECK(max_step < 0.01f, "wander: jumped %.4f in one block", max_step);
+    CHECK(differs, "wander: seeds 5 and 6 gave the same path");
+}
+
 int main() {
     TestSoftClip();
     TestHilbertQuadrature();
@@ -640,6 +663,7 @@ int main() {
     TestRadioFilterSweepStable();
     TestMappings();
     TestBlips();
+    TestWander();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }
