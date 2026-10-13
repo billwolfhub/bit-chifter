@@ -1359,6 +1359,99 @@ static void TestPlateReverbClear() {
     CHECK(peak == 0.f, "plate: %g after Clear()", peak);
 }
 
+// Runs a (static, large) engine on a 440 Hz tone for `tone_s`, then silence for `silence_s`,
+// with reverb `reverb_tone` during the tone and `reverb_silence` after; returns the left output
+static std::vector<float> RunToneThenSilence(float tone_s, float silence_s, float reverb_tone, float reverb_silence) {
+    static bitch::Engine e;
+    static bitch::PlateReverb plate;
+    e.Init(kSampleRate, 48, &plate);
+    bitch::Params p;
+    p.mix = 1.f;
+    std::vector<float> out;
+    float in[48], out_l[48], out_r[48];
+    int tone_blocks = (int)(tone_s * kSampleRate / 48), blocks = (int)((tone_s + silence_s) * kSampleRate / 48);
+    for (int b = 0; b < blocks; b++) {
+        p.reverb = b < tone_blocks ? reverb_tone : reverb_silence;
+        for (int k = 0; k < 48; k++)
+            in[k] = b < tone_blocks ? 0.3f * sinf(2 * kPi * 440.f * (b * 48 + k) / kSampleRate) : 0.f;
+        e.Process(in, in, out_l, out_r, 48, p);
+        out.insert(out.end(), out_l, out_l + 48);
+    }
+    return out;
+}
+
+static float Peak(const std::vector<float> &x) {
+    float peak = 0.f;
+    for (float v : x) peak = std::max(peak, fabsf(v));
+    return peak;
+}
+
+static void TestEngineReverb() {
+    // Off: silence right after the tone stops
+    auto dry = RunToneThenSilence(0.5f, 1.f, 0.f, 0.f);
+    CHECK(Peak(Window(dry, 0.6f, 1.5f)) < 1e-4f, "reverb off: %g after the tone", Peak(Window(dry, 0.6f, 1.5f)));
+    // On: a tail after the tone stops
+    auto wet = RunToneThenSilence(0.5f, 1.f, 1.f, 1.f);
+    CHECK(Peak(Window(wet, 0.6f, 0.9f)) > 0.01f, "reverb on: tail only %g", Peak(Window(wet, 0.6f, 0.9f)));
+    // Turned down, then up again: the old tail doesn't come back
+    static bitch::Engine e;
+    static bitch::PlateReverb plate;
+    e.Init(kSampleRate, 48, &plate);
+    bitch::Params p;
+    float in[48], out_l[48], out_r[48];
+    auto run = [&](float seconds, float level, float reverb) {
+        p.reverb = reverb;
+        float peak = 0.f;
+        for (int b = 0; b < (int)(seconds * kSampleRate / 48); b++) {
+            for (int k = 0; k < 48; k++) in[k] = level * sinf(2 * kPi * 440.f * (b * 48 + k) / kSampleRate);
+            e.Process(in, in, out_l, out_r, 48, p);
+            for (int k = 0; k < 48; k++) peak = std::max(peak, std::max(fabsf(out_l[k]), fabsf(out_r[k])));
+        }
+        return peak;
+    };
+    run(0.5f, 0.3f, 1.f);                  // tone into the reverb
+    run(0.5f, 0.f, 0.f);                   // reverb down (it glides out over ~0.2 s), silence
+    float replay = run(0.5f, 0.f, 1.f);    // reverb up again, still silence
+    CHECK(replay < 1e-5f, "reverb: the old tail replayed (%g) after turning it down and up", replay);
+    // No plate given: Params::reverb is ignored (it still runs, and leaves no tail)
+    static bitch::Engine bare;
+    bare.Init(kSampleRate);
+    p = bitch::Params();
+    p.reverb = 1.f;
+    float tail = 0.f;
+    for (int b = 0; b < (int)(1.5f * kSampleRate / 48); b++) {
+        for (int k = 0; k < 48; k++)
+            in[k] = b < (int)(0.5f * kSampleRate / 48) ? 0.3f * sinf(2 * kPi * 440.f * (b * 48 + k) / kSampleRate) : 0.f;
+        bare.Process(in, in, out_l, out_r, 48, p);
+        if (b * 48 >= (int)(0.6f * kSampleRate))
+            for (int k = 0; k < 48; k++) tail = std::max(tail, std::max(fabsf(out_l[k]), fabsf(out_r[k])));
+    }
+    CHECK(tail < 1e-4f, "reverb without a plate: %g after the tone", tail);
+}
+
+static void TestEngineReverbStable() {
+    static bitch::Engine e;
+    static bitch::PlateReverb plate;
+    e.Init(kSampleRate, 48, &plate);
+    bitch::Params p;
+    p.reverb = 1.f;
+    p.feedback = 0.95f;
+    p.reception = 1.f;
+    p.tune_hz = 37.f;
+    uint32_t seed = 5;
+    float in[48], out_l[48], out_r[48];
+    bool finite = true;
+    for (int b = 0; b < (int)(20 * kSampleRate / 48); b++) {
+        for (float &v : in) {
+            seed = seed * 1664525u + 1013904223u;
+            v = ((seed >> 8) / 8388608.f - 1.f) * 0.5f;
+        }
+        e.Process(in, in, out_l, out_r, 48, p);
+        for (int k = 0; k < 48; k++) finite = finite && std::isfinite(out_l[k]) && std::isfinite(out_r[k]);
+    }
+    CHECK(finite, "reverb stress: non-finite output");
+}
+
 int main() {
     TestSoftQuantize();
     TestSoftClip();
@@ -1417,6 +1510,8 @@ int main() {
     TestMixAndReverb();
     TestPlateReverb();
     TestPlateReverbClear();
+    TestEngineReverb();
+    TestEngineReverbStable();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }

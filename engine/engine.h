@@ -12,6 +12,7 @@
 #include "static_noise.h"
 #include "detents.h"
 #include "pitch_tracker.h"
+#include "plate_reverb.h"
 
 namespace bitch {
 
@@ -32,6 +33,7 @@ struct Params {
     float reception = 0.f;    // 0 clean .. 1 lost in the noise (drift, fading, static, AGC, drive)
     float detent = 0.f;          // harmonic detent strength 0-0.95 (0 = off; the firmware uses 0.7)
     float dial_inertia_s = 0.f;  // TUNE inertia, per stage of two (0 = off; the firmware uses 0.06)
+    float reverb = 0.f;          // plate reverb 0-1: return level (up to -6 dB) and decay (0 = off)
 };
 
 // The sound engine: no hardware code, so it runs on the Daisy and on the Mac.
@@ -44,10 +46,12 @@ struct Params {
 // + static -> radio filter -> AGC. At 0 every stage is an exact pass-through.
 // The shift (TUNE) goes through optional inertia, the tuning hand (reception x ±150 Hz) and the
 // harmonic detents (pulled onto multiples of the tracked pitch) once per block.
+// A light stereo plate reverb (Params::reverb) is added after the dry/wet mix, before the soft clip.
 class Engine {
   public:
-    // block_size: the size every Process() call will use (the firmware and sim use 48)
-    void Init(float sample_rate, size_t block_size = 48);
+    // block_size: the size every Process() call will use (the firmware and sim use 48).
+    // plate: the reverb is ~145 KB, so the caller provides it (or none: then Params::reverb is ignored)
+    void Init(float sample_rate, size_t block_size = 48, PlateReverb *plate = nullptr);
     // Test hook: a side's shifter oscillator phase (0-1)
     float ShifterPhase(int side) const { return shifter_[side].Phase(); }
     // The source's tracked fundamental, Hz (the last one found: kept when the confidence drops to 0)
@@ -96,6 +100,10 @@ class Engine {
     float detent_amount_ = 0.f;  // strength x confidence, smoothed per block
     float detent_pitch_ = 0.f;   // the pitch the detents pull towards (held while they release)
     float target_shift_ = 0.f;   // the dial's shift for this block; shift_hz_ glides to it
+    // The plate reverb, after the mix (fed by both sides, returning a wide stereo tail)
+    PlateReverb *plate_ = nullptr; // optional; owned by the front end (the firmware keeps it in SDRAM)
+    float reverb_ = 0.f;          // glided towards params.reverb
+    bool plate_running_ = false;  // false: the plate is idle (cleared before it starts again)
 };
 
 } // namespace bitch

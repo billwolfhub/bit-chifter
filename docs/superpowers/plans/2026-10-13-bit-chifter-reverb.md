@@ -379,6 +379,7 @@ git commit -m "Engine: light stereo plate reverb (Dattorro)"
 - Modify: `engine/engine.h`
 - Modify: `engine/engine.cpp`
 - Modify: `sim/test_engine.cpp`
+- Modify: `simple_touch.cpp` (the plate lives in SDRAM, owned by the front end)
 
 - [ ] **Step 1: Add the failing tests**
 
@@ -388,7 +389,8 @@ Above `main()` in `sim/test_engine.cpp`:
 // with reverb `reverb_tone` during the tone and `reverb_silence` after; returns the left output
 static std::vector<float> RunToneThenSilence(float tone_s, float silence_s, float reverb_tone, float reverb_silence) {
     static bitch::Engine e;
-    e.Init(kSampleRate);
+    static bitch::PlateReverb plate;
+    e.Init(kSampleRate, 48, &plate);
     bitch::Params p;
     p.mix = 1.f;
     std::vector<float> out;
@@ -419,7 +421,8 @@ static void TestEngineReverb() {
     CHECK(Peak(Window(wet, 0.6f, 0.9f)) > 0.01f, "reverb on: tail only %g", Peak(Window(wet, 0.6f, 0.9f)));
     // Turned down, then up again: the old tail doesn't come back
     static bitch::Engine e;
-    e.Init(kSampleRate);
+    static bitch::PlateReverb plate;
+    e.Init(kSampleRate, 48, &plate);
     bitch::Params p;
     float in[48], out_l[48], out_r[48];
     auto run = [&](float seconds, float level, float reverb) {
@@ -436,11 +439,26 @@ static void TestEngineReverb() {
     run(0.5f, 0.f, 0.f);                   // reverb down (it glides out over ~0.2 s), silence
     float replay = run(0.5f, 0.f, 1.f);    // reverb up again, still silence
     CHECK(replay < 1e-5f, "reverb: the old tail replayed (%g) after turning it down and up", replay);
+    // No plate given: Params::reverb is ignored (it still runs, and leaves no tail)
+    static bitch::Engine bare;
+    bare.Init(kSampleRate);
+    p = bitch::Params();
+    p.reverb = 1.f;
+    float tail = 0.f;
+    for (int b = 0; b < (int)(1.5f * kSampleRate / 48); b++) {
+        for (int k = 0; k < 48; k++)
+            in[k] = b < (int)(0.5f * kSampleRate / 48) ? 0.3f * sinf(2 * kPi * 440.f * (b * 48 + k) / kSampleRate) : 0.f;
+        bare.Process(in, in, out_l, out_r, 48, p);
+        if (b * 48 >= (int)(0.6f * kSampleRate))
+            for (int k = 0; k < 48; k++) tail = std::max(tail, std::max(fabsf(out_l[k]), fabsf(out_r[k])));
+    }
+    CHECK(tail < 1e-4f, "reverb without a plate: %g after the tone", tail);
 }
 
 static void TestEngineReverbStable() {
     static bitch::Engine e;
-    e.Init(kSampleRate);
+    static bitch::PlateReverb plate;
+    e.Init(kSampleRate, 48, &plate);
     bitch::Params p;
     p.reverb = 1.f;
     p.feedback = 0.95f;
@@ -475,31 +493,37 @@ Expected: compile error, `no member named 'reverb' in 'bitch::Params'`.
 ```cpp
     float reverb = 0.f;          // plate reverb 0-1: return level (up to -6 dB) and decay (0 = off)
 ```
+- `Init` takes the plate (it is ~145 KB, too big for DTCM where the firmware's globals go, so the caller provides it):
+```cpp
+    // plate: the reverb is ~145 KB, so the caller provides it (or none: then Params::reverb is ignored)
+    void Init(float sample_rate, size_t block_size = 48, PlateReverb *plate = nullptr);
+```
 - Extend the class comment: "A light stereo plate reverb (Params::reverb) is added after the dry/wet mix, before the soft clip."
 - Add private members (after the dial members):
 ```cpp
     // The plate reverb, after the mix (fed by both sides, returning a wide stereo tail)
-    PlateReverb plate_;
+    PlateReverb *plate_ = nullptr; // optional; owned by the front end (the firmware keeps it in SDRAM)
     float reverb_ = 0.f;          // glided towards params.reverb
     bool plate_running_ = false;  // false: the plate is idle (cleared before it starts again)
 ```
 
 `engine/engine.cpp`:
-- In `Init`, after `pitch_.Init(sample_rate);`: `plate_.Init(sample_rate);`.
-- In `Reset()`: `plate_.Clear(); reverb_ = 0.f; plate_running_ = false;`.
+- In `Init`, store the pointer (`plate_ = plate;`) and, after `pitch_.Init(sample_rate);`: `if (plate_) plate_->Init(sample_rate);`.
+- In `Reset()` (also the NaN recovery): `if (plate_) plate_->Clear(); reverb_ = 0.f; plate_running_ = false;`.
 - In `Process()`, after the per-block dial code (before the per-sample loop):
 ```cpp
-    // The plate: idle (and skipped) at 0; cleared when it starts again, so an old tail never replays
-    float reverb = Clamp(params.reverb, 0.f, 1.f);
+    // The plate: idle (and skipped) at 0 or without a plate; cleared when it starts again, so an
+    // old tail never replays (plate_-> is only reached while plate_running_, which needs a plate)
+    float reverb = plate_ ? Clamp(params.reverb, 0.f, 1.f) : 0.f;
     if (reverb > 0.f && !plate_running_) {
-        plate_.Clear();
+        plate_->Clear();
         plate_running_ = true;
     }
     if (reverb == 0.f && reverb_ < 1e-4f) {
         reverb_ = 0.f;
         plate_running_ = false;
     }
-    plate_.SetDecay(reverb_);
+    if (plate_running_) plate_->SetDecay(reverb_);
 ```
 - In the per-sample loop, replace:
 ```cpp
@@ -512,13 +536,19 @@ with:
         if (plate_running_) {
             reverb_ += glide_ * (reverb - reverb_);
             float tail_l, tail_r;
-            plate_.Process(left, right, tail_l, tail_r);
+            plate_->Process(left, right, tail_l, tail_r);
             left += 0.5f * reverb_ * tail_l; // up to -6 dB
             right += 0.5f * reverb_ * tail_r;
         }
         out_l[i] = SoftClip(left);
         out_r[i] = SoftClip(right);
 ```
+
+`simple_touch.cpp`: next to the engine global,
+```cpp
+DSY_SDRAM_BSS bitch::PlateReverb plate; // ~145 KB: too big for DTCM (where globals go); Init() clears it (uninitialised SDRAM holds NaNs)
+```
+and `engine.Init(hw.AudioSampleRate(), hw.AudioBlockSize(), &plate);` (after `hw.Init()`, which sets up the SDRAM). The firmware sets `p.reverb` only in Task 5, so the reverb stays 0 there for now.
 
 - [ ] **Step 4: Run the tests**
 
@@ -528,14 +558,14 @@ Expected: `All tests passed`, including every earlier test (the reverb defaults 
 - [ ] **Step 5: Check the firmware still builds, and the memory**
 
 Run: `make -C ~/local_files/daisy/bit-chifter`
-Expected: no errors or warnings; SRAM use rises by about 145 KB (from ~113 KB to ~260 KB of 480 KB). Report the SRAM line.
+Expected: no errors or warnings; DTCMRAM unchanged (~34 KB of 128 KB), SDRAM rises by about 145 KB (from 0). Report the DTCMRAM, SRAM and SDRAM lines.
 
 - [ ] **Step 6: Commit**
 
 ```bash
 cd ~/local_files/daisy/bit-chifter
-git add engine/engine.h engine/engine.cpp sim/test_engine.cpp
-git commit -m "Engine: plate reverb after the mix"
+git add engine/engine.h engine/engine.cpp sim/test_engine.cpp simple_touch.cpp docs
+git commit -m "Engine: plate reverb after the mix (plate in SDRAM, owned by the front end)"
 ```
 
 ---

@@ -28,8 +28,9 @@ static const float kQuiet = 0.0005f;  // -66 dBFS: an input must stay below this
 
 static float Clamp(float x, float lo, float hi) { return fminf(fmaxf(x, lo), hi); }
 
-void Engine::Init(float sample_rate, size_t block_size) {
+void Engine::Init(float sample_rate, size_t block_size, PlateReverb *plate) {
     sample_rate_ = sample_rate;
+    plate_ = plate;
     float block_rate = sample_rate / (float)block_size;
     for (RingMod &r : ring_) r.Init(sample_rate);
     for (Shifter &s : shifter_) s.Init(sample_rate);
@@ -43,6 +44,7 @@ void Engine::Init(float sample_rate, size_t block_size) {
     }
     hand_.Init(block_rate, 47u);
     pitch_.Init(sample_rate);
+    if (plate_) plate_->Init(sample_rate);
     glide_ = 1.f - expf(-1.f / (0.02f * sample_rate));
     envelope_release_ = expf(-1.f / (0.2f * sample_rate));
     take_glide_ = 1.f - expf(-1.f / (0.05f * sample_rate));
@@ -79,6 +81,9 @@ void Engine::Reset() {
     detent_pitch_ = 0.f;
     target_shift_ = 0.f;
     pitch_.Reset();
+    if (plate_) plate_->Clear();
+    reverb_ = 0.f;
+    plate_running_ = false;
 }
 
 void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *out_r, size_t size,
@@ -140,6 +145,19 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
     if (detent_target >= detent_amount_) detent_pitch_ = pitch_.Pitch();
     target_shift_ = SoftQuantize(dial + hand, detent_pitch_, detent_amount_);
 
+    // The plate: idle (and skipped) at 0 or without a plate; cleared when it starts again, so an
+    // old tail never replays (plate_-> is only reached while plate_running_, which needs a plate)
+    float reverb = plate_ ? Clamp(params.reverb, 0.f, 1.f) : 0.f;
+    if (reverb > 0.f && !plate_running_) {
+        plate_->Clear();
+        plate_running_ = true;
+    }
+    if (reverb == 0.f && reverb_ < 1e-4f) {
+        reverb_ = 0.f;
+        plate_running_ = false;
+    }
+    if (plate_running_) plate_->SetDecay(reverb_);
+
     // Mono detection: a side whose input is silent takes the other side's input instead
     float take_target[2] = {active_[1] && !active_[0] ? 1.f : 0.f, active_[0] && !active_[1] ? 1.f : 0.f};
 
@@ -195,8 +213,16 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
             float wet = agc_[c].Process(filter_[c].Process(received));
             y[c] = dry + mix_ * (wet - dry);
         }
-        out_l[i] = SoftClip(y[0] + swap_ * (y[1] - y[0]));
-        out_r[i] = SoftClip(y[1] + swap_ * (y[0] - y[1]));
+        float left = y[0] + swap_ * (y[1] - y[0]), right = y[1] + swap_ * (y[0] - y[1]);
+        if (plate_running_) {
+            reverb_ += glide_ * (reverb - reverb_);
+            float tail_l, tail_r;
+            plate_->Process(left, right, tail_l, tail_r);
+            left += 0.5f * reverb_ * tail_l; // up to -6 dB
+            right += 0.5f * reverb_ * tail_r;
+        }
+        out_l[i] = SoftClip(left);
+        out_r[i] = SoftClip(right);
     }
     pitch_.Work();
     // Hold: a side counts as active at once when its envelope passes kSilent, and as unused
