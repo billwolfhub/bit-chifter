@@ -8,6 +8,9 @@
 
 namespace bitch {
 
+// How the two sides' shifts relate (cycled with the TOU logo pad)
+enum class StereoMode { kLinked, kMirror, kRotate };
+
 // Everything the front end controls (physical values; see mapping.h for knobs).
 struct Params {
     float tune_hz = 0.f;      // shift, -2500 to +2500 Hz
@@ -18,12 +21,15 @@ struct Params {
     float filter_hz = 1000.f; // radio filter centre, 150 to 5000 Hz
     float filter_q = 0.7f;    // 0.7 (wide) to 12 (narrow)
     float filter_open = 1.f;  // 1 = filter bypassed
+    StereoMode stereo_mode = StereoMode::kLinked;
 };
 
 // The sound engine: no hardware code, so it runs on the Daisy and on the Mac.
 // True stereo: each side has its own ring mod -> shifter (with feedback) -> radio
 // filter -> dry/wet -> soft clip, with shared controls. If one input is silent, the
 // other feeds both sides at full level.
+// Stereo modes: Linked (same shift both sides), Mirror (right gets the opposite shift),
+// Rotate (over 8 s the sides' shifts sweep through each other and the pair circles left to right).
 class Engine {
   public:
     void Init(float sample_rate);
@@ -47,6 +53,8 @@ class Engine {
     float take_other_[2] = {0.f, 0.f};
     float envelope_release_ = 0.f; // per sample, ~200 ms
     float take_glide_ = 0.f;       // per sample, ~50 ms
+    float rotate_phase_ = 0.f; // 0-1 around the Rotate cycle
+    float rotate_step_ = 0.f;  // per sample, one cycle per 8 s
 };
 
 } // namespace bitch

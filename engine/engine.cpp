@@ -23,6 +23,7 @@ void Engine::Init(float sample_rate) {
     glide_ = 1.f - expf(-1.f / (0.02f * sample_rate));
     envelope_release_ = expf(-1.f / (0.2f * sample_rate));
     take_glide_ = 1.f - expf(-1.f / (0.05f * sample_rate));
+    rotate_step_ = 1.f / (8.f * sample_rate);
     Reset();
 }
 
@@ -36,6 +37,7 @@ void Engine::Reset() {
     filter_q_ = 0.7f;
     filter_open_ = 1.f;
     block_glide_ = 0.f; // set on the first block (depends on the block size)
+    rotate_phase_ = 0.f;
     envelope_[0] = envelope_[1] = 0.f;
     take_other_[0] = take_other_[1] = 0.f;
 }
@@ -71,16 +73,29 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
         for (int c = 0; c < 2; c++) envelope_[c] = fmaxf(fabsf(x[c]), envelope_[c] * envelope_release_);
         shift_hz_ += glide_ * (tune - shift_hz_);
         carrier_hz_ += glide_ * (carrier - carrier_hz_);
+        float shift[2] = {shift_hz_, shift_hz_};
+        float swap = 0.f; // 0 = sides as they are, 1 = fully swapped
+        if (params.stereo_mode == StereoMode::kMirror) {
+            shift[1] = -shift_hz_;
+        } else if (params.stereo_mode == StereoMode::kRotate) {
+            rotate_phase_ += rotate_step_;
+            if (rotate_phase_ >= 1.f) rotate_phase_ -= 1.f;
+            float angle = 6.28318530718f * rotate_phase_;
+            float sweep = cosf(angle); // left's shift goes +shift .. -shift, right's the other way
+            shift[0] = shift_hz_ * sweep;
+            shift[1] = -shift_hz_ * sweep;
+            swap = 0.5f + 0.5f * sinf(angle); // the pair circles from left to right
+        }
         float y[2];
         for (int c = 0; c < 2; c++) {
             take_other_[c] += take_glide_ * (take_target[c] - take_other_[c]);
             float dry = x[c] + take_other_[c] * x[1 - c];
             float ringed = ring_[c].Process(dry, carrier_hz_, ring);
-            float wet = filter_[c].Process(shifter_[c].Process(ringed, shift_hz_, feedback));
-            y[c] = SoftClip(dry + mix * (wet - dry));
+            float wet = filter_[c].Process(shifter_[c].Process(ringed, shift[c], feedback));
+            y[c] = dry + mix * (wet - dry);
         }
-        out_l[i] = y[0];
-        out_r[i] = y[1];
+        out_l[i] = SoftClip(y[0] + swap * (y[1] - y[0]));
+        out_r[i] = SoftClip(y[1] + swap * (y[0] - y[1]));
     }
     // A NaN/Inf would stay in the feedback loop and silence everything: reset instead
     if (!std::isfinite(out_l[size - 1]) || !std::isfinite(out_r[size - 1])) {

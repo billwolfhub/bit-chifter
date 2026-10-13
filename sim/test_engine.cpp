@@ -431,6 +431,47 @@ static void TestEngineDefaultsTransparent() {
     CHECK(Magnitude(out, 1100.f) > 0.2, "defaults: 1100 Hz %.3f", Magnitude(out, 1100.f));
 }
 
+// Mirror: left shifted up, right shifted down
+static void TestEngineMirror() {
+    bitch::Params p;
+    p.tune_hz = 100.f;
+    p.stereo_mode = bitch::StereoMode::kMirror;
+    std::vector<float> l, r;
+    RunEngineStereo(p, 1.f, 1000.f, 0.25f, 1000.f, 0.25f, l, r);
+    auto wl = Window(l, 0.5f, 1.f), wr = Window(r, 0.5f, 1.f);
+    CHECK(Magnitude(wl, 1100.f) > 0.2, "mirror: OUT L 1100 Hz %.3f", Magnitude(wl, 1100.f));
+    CHECK(Magnitude(wr, 900.f) > 0.2, "mirror: OUT R 900 Hz %.3f", Magnitude(wr, 900.f));
+    CHECK(Magnitude(wr, 1100.f) < 0.01, "mirror: OUT R 1100 Hz %.3f", Magnitude(wr, 1100.f));
+}
+
+// Rotate, 8 s cycle. With no shift, only the swapping shows: a quarter of the way
+// round (2 s) the sides are swapped, three quarters round (6 s) they're back
+static void TestEngineRotateSwapsSides() {
+    bitch::Params p;
+    p.tune_hz = 0.f;
+    p.stereo_mode = bitch::StereoMode::kRotate;
+    std::vector<float> l, r;
+    RunEngineStereo(p, 7.f, 1000.f, 0.25f, 1500.f, 0.25f, l, r);
+    auto at2 = Window(l, 1.9f, 2.1f), at6 = Window(l, 5.9f, 6.1f);
+    CHECK(Magnitude(at2, 1500.f) > 0.15, "rotate 2 s: OUT L has R's 1500 Hz %.3f", Magnitude(at2, 1500.f));
+    CHECK(Magnitude(at2, 1000.f) < 0.05, "rotate 2 s: OUT L still L's 1000 Hz %.3f", Magnitude(at2, 1000.f));
+    CHECK(Magnitude(at6, 1000.f) > 0.15, "rotate 6 s: OUT L back to 1000 Hz %.3f", Magnitude(at6, 1000.f));
+    CHECK(Magnitude(at6, 1500.f) < 0.05, "rotate 6 s: OUT L still has 1500 Hz %.3f", Magnitude(at6, 1500.f));
+}
+
+// Rotate at the start of the cycle: the sides' shifts are opposite (+100 / -100 Hz),
+// and the pair sits in the middle, so both outputs carry both
+static void TestEngineRotateShifts() {
+    bitch::Params p;
+    p.tune_hz = 100.f;
+    p.stereo_mode = bitch::StereoMode::kRotate;
+    std::vector<float> l, r;
+    RunEngineStereo(p, 0.3f, 1000.f, 0.25f, 1000.f, 0.25f, l, r);
+    auto w = Window(l, 0.05f, 0.25f);
+    CHECK(Magnitude(w, 1100.f) > 0.06, "rotate start: 1100 Hz %.3f", Magnitude(w, 1100.f));
+    CHECK(Magnitude(w, 900.f) > 0.06, "rotate start: 900 Hz %.3f", Magnitude(w, 900.f));
+}
+
 int main() {
     TestSoftClip();
     TestHilbertQuadrature();
@@ -447,6 +488,9 @@ int main() {
     TestEngineRingBeforeShift();
     TestEngineFilter();
     TestEngineDefaultsTransparent();
+    TestEngineMirror();
+    TestEngineRotateSwapsSides();
+    TestEngineRotateShifts();
     TestRingMod();
     TestRadioFilter();
     TestRadioFilterSweepStable();
