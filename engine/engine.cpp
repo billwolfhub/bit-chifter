@@ -2,6 +2,7 @@
 
 #include <cmath>
 
+#include "agc.h"
 #include "fading.h"
 #include "softclip.h"
 
@@ -13,6 +14,7 @@ constexpr float Hilbert::kA[4];
 constexpr float Hilbert::kB[4];
 constexpr int Fading::kSize;
 constexpr int Fading::kMask;
+constexpr float Agc::kTarget;
 
 static const float kSilent = 0.001f;  // -60 dBFS: above this an input counts as used at once
 static const float kQuiet = 0.0005f;  // -66 dBFS: an input must stay below this for 3 s to count as unused

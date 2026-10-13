@@ -11,6 +11,7 @@
 #include "mapping.h"
 #include "radio_filter.h"
 #include "ring_mod.h"
+#include "agc.h"
 #include "static_noise.h"
 #include "fading.h"
 #include "drive.h"
@@ -748,6 +749,41 @@ static void TestStaticNoise() {
     CHECK(peak < 0.6f, "static 1: peak %.3f", peak);
 }
 
+// Runs the AGC on a 1 kHz sine for 2 s at the given strength; returns the last 0.5 s peak
+static float AgcPeak(float amplitude, float strength) {
+    bitch::Agc a;
+    a.Init(kSampleRate);
+    float peak = 0.f;
+    for (int b = 0; b < (int)(2 * kSampleRate / 48); b++) {
+        a.Update(strength);
+        for (int k = 0; k < 48; k++) {
+            int t = b * 48 + k;
+            float y = a.Process(amplitude * sinf(2 * kPi * 1000.f * t / kSampleRate));
+            if (t >= (int)(1.5f * kSampleRate)) peak = std::max(peak, fabsf(y));
+        }
+    }
+    return peak;
+}
+
+static void TestAgc() {
+    bitch::Agc off;
+    off.Init(kSampleRate);
+    bool identical = true;
+    for (int b = 0; b < 100; b++) {
+        off.Update(0.f);
+        for (int k = 0; k < 48; k++) {
+            float x = 0.05f * sinf(0.2f * (b * 48 + k));
+            identical = identical && off.Process(x) == x;
+        }
+    }
+    CHECK(identical, "agc 0: not a pass-through");
+    // Strength 1 aims for a 0.3 peak: within reach it gets there, beyond it hits the limits
+    float mid = AgcPeak(0.1f, 1.f), loud = AgcPeak(0.9f, 1.f), quiet = AgcPeak(0.02f, 1.f);
+    CHECK(fabsf(Db(mid / 0.3)) < 1.5, "agc: 0.1 in -> peak %.3f (want 0.3)", mid);
+    CHECK(fabsf(Db(loud / 0.3)) < 1.5, "agc: 0.9 in -> peak %.3f (want 0.3)", loud);
+    CHECK(fabsf(Db(quiet / (0.02 * 7.94))) < 1.5, "agc: 0.02 in -> peak %.3f (want the +18 dB limit, 0.159)", quiet);
+}
+
 int main() {
     TestSoftClip();
     TestHilbertQuadrature();
@@ -777,6 +813,7 @@ int main() {
     TestRadioFilterSweepStable();
     TestMappings();
     TestBlips();
+    TestAgc();
     TestStaticNoise();
     TestFading();
     TestDrive();
