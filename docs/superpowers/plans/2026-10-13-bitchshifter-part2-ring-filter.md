@@ -376,11 +376,11 @@ inline float CarrierHz(float knob) { return 0.1f * powf(50000.f, knob); }
 inline float FilterHz(float knob) { return 150.f * powf(5000.f / 150.f, knob); }
 
 // Knob -> radio filter width: narrow and resonant (Q 12) to wide (Q 0.7) over the
-// first 85% of the turn, then crossfading to fully open (bypassed) at the end
+// first 85% of the turn, then crossfading to fully open (bypassed) between 85% and 97%
 inline void FilterWidth(float knob, float &q, float &open) {
     float narrowing = fminf(knob / 0.85f, 1.f);
     q = 12.f * powf(0.7f / 12.f, narrowing);
-    open = fminf(fmaxf((knob - 0.85f) / 0.15f, 0.f), 1.f);
+    open = fminf(fmaxf((knob - 0.85f) / 0.12f, 0.f), 1.f); // fully open from 97% of the turn (a knob rarely reads exactly 1.0)
 }
 
 } // namespace bitch
@@ -1155,7 +1155,7 @@ In `README.md`, rename the "Part 1: playable shifter" heading to "Controls so fa
 | Knob 1 RING | Ring-mod amount |
 | Knob 2 CARRIER | Ring-mod carrier, 0.1 Hz (tremolo) – 5 kHz (bells) |
 | Knob 3 FILTER | Radio filter centre, 150 Hz – 5 kHz |
-| Knob 4 WIDTH | Radio filter: narrow and whistly → wide → fully open (last 15% of the turn) |
+| Knob 4 WIDTH | Radio filter: narrow and whistly → wide → fully open (from about 97% of the turn) |
 | Knob 5 FEEDBACK | Feedback 0–95% (barberpole) |
 | Knob 6 MIX | Dry/wet |
 | "TOU" logo pad | Stereo mode: 1 blip Linked, 2 Mirror, 3 Rotate (8 s) |
