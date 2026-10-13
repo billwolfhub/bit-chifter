@@ -53,4 +53,8 @@ inline void MixAndReverb(float knob, float &mix, float &reverb) {
 // (a fader rarely reads exactly 0 or 1)
 inline float ReceptionAmount(float fader) { return fminf(fmaxf((fader - 0.03f) / 0.94f, 0.f), 1.f); }
 
+// Reception amount -> the pad effects' amount: clearly there with the fader at the bottom
+// (0.35), extreme at the top (1)
+inline float EffectAmount(float reception) { return 0.35f + 0.65f * fminf(fmaxf(reception, 0.f), 1.f); }
+
 } // namespace bitch

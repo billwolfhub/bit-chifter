@@ -2,6 +2,7 @@
 #include <cmath>
 #include <cstdio>
 #include <vector>
+#include <cstring>
 
 #include "blips.h"
 #include "engine.h"
@@ -19,6 +20,7 @@
 #include "pitch_tracker.h"
 #include "random.h"
 #include "plate_reverb.h"
+#include "effects.h"
 #include <algorithm>
 #include <cstdint>
 
@@ -1578,6 +1580,30 @@ static void TestEngineReverbNanRecovery() {
     CHECK(std::isfinite(peak) && peak < 1e-5f, "reverb after a NaN: %g (stale tail)", peak);
 }
 
+static void TestEffectsMapping() {
+    using namespace bitch;
+    CHECK(PadEffect(0, 4) == kEchoes, "page 1 big left pad: %d", PadEffect(0, 4));
+    CHECK(PadEffect(0, 6) == kSpiralUp, "page 1 big right pad: %d", PadEffect(0, 6));
+    CHECK(PadEffect(0, 1) == kFeedbackBurst, "page 1 top centre: %d", PadEffect(0, 1));
+    CHECK(PadEffect(0, 8) == kSpinDown && PadEffect(0, 9) == kSpinUp, "page 1 bottom pads");
+    CHECK(PadEffect(1, 0) == kStaticBurst && PadEffect(1, 2) == kSquelch, "page 2 top pads");
+    CHECK(PadEffect(1, 8) == kFadeOut && PadEffect(1, 9) == kFilterSlam && PadEffect(1, 1) == kDriftMax,
+          "page 2 bottom and top centre pads");
+    CHECK(PadEffect(2, 0) == kRing100 && PadEffect(2, 2) == kCarrierX2 && PadEffect(2, 8) == kKillDry,
+          "page 3 pads");
+    CHECK(PadEffect(2, 9) == kChaos && PadEffect(2, 1) == kHoldDrift, "page 3 chaos and hold drift");
+    CHECK(PadEffect(3, 0) == -1 && PadEffect(0, 10) == -1 && PadEffect(-1, 0) == -1, "out of range");
+    uint32_t seen = 0;
+    for (int page = 0; page < 3; page++)
+        for (int ch = 0; ch < 10; ch++) seen |= 1u << PadEffect(page, ch);
+    CHECK(seen == (1u << kEffectCount) - 1 && kEffectCount == 30, "pads cover %08x of the 30 effects", seen);
+    CHECK(strcmp(EffectName(kSquelch), "squelch") == 0 && strcmp(EffectName(kHoldDrift), "hold_drift") == 0,
+          "effect names");
+    CHECK(Has(Bit(kRing100) | Bit(kKillDry), kKillDry) && !Has(Bit(kRing100), kKillDry), "Has/Bit");
+    CHECK(EffectAmount(0.f) == 0.35f && EffectAmount(1.f) == 1.f && fabsf(EffectAmount(0.5f) - 0.675f) < 1e-6f,
+          "effect amount %.3f %.3f", EffectAmount(0.f), EffectAmount(1.f));
+}
+
 int main() {
     TestSoftQuantize();
     TestSoftClip();
@@ -1643,6 +1669,7 @@ int main() {
     TestEngineReverbFlicker();
     TestEngineReverbOffBitExact();
     TestEngineReverbNanRecovery();
+    TestEffectsMapping();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }
