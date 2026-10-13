@@ -18,6 +18,7 @@
 #include "detents.h"
 #include "pitch_tracker.h"
 #include "random.h"
+#include "plate_reverb.h"
 #include <algorithm>
 #include <cstdint>
 
@@ -1290,6 +1291,74 @@ static void TestMixAndReverb() {
     CHECK(mix == 1.f && reverb == 1.f, "mix knob 100%%: mix %.3f reverb %.3f", mix, reverb);
 }
 
+// Runs a plate on an impulse (in both inputs) for `seconds`, returning both outputs
+static void PlateImpulse(float decay_amount, float seconds, std::vector<float> &l, std::vector<float> &r) {
+    static bitch::PlateReverb plate; // large: keep it off the stack
+    plate.Init(kSampleRate);
+    plate.SetDecay(decay_amount);
+    l.clear();
+    r.clear();
+    for (int n = 0; n < (int)(seconds * kSampleRate); n++) {
+        float x = n == 0 ? 1.f : 0.f, ol, orr;
+        plate.Process(x, x, ol, orr);
+        l.push_back(ol);
+        r.push_back(orr);
+    }
+}
+
+static double Energy(const std::vector<float> &x) {
+    double e = 0.0;
+    for (float v : x) e += (double)v * v;
+    return e;
+}
+
+static void TestPlateReverb() {
+    std::vector<float> l, r;
+    PlateImpulse(0.f, 4.f, l, r);
+    bool finite = true;
+    float peak = 0.f;
+    for (size_t n = 0; n < l.size(); n++) {
+        finite = finite && std::isfinite(l[n]) && std::isfinite(r[n]);
+        peak = std::max(peak, std::max(fabsf(l[n]), fabsf(r[n])));
+    }
+    CHECK(finite, "plate: non-finite output");
+    CHECK(peak < 1.f, "plate: impulse peak %.3f", peak);
+    // A tail on both sides, starting after the predelay
+    double early_l = Energy(Window(l, 0.f, 0.009f)), tail_l = Energy(Window(l, 0.05f, 0.3f));
+    double tail_r = Energy(Window(r, 0.05f, 0.3f));
+    CHECK(early_l < 1e-12, "plate: output before the predelay (energy %g)", early_l);
+    CHECK(tail_l > 1e-3 && tail_r > 1e-3, "plate: tail energy L %g R %g", tail_l, tail_r);
+    // Wide: the sides are decorrelated
+    auto wl = Window(l, 0.05f, 0.5f), wr = Window(r, 0.05f, 0.5f);
+    double lr = 0.0;
+    for (size_t n = 0; n < wl.size(); n++) lr += (double)wl[n] * wr[n];
+    double correlation = lr / sqrt(Energy(wl) * Energy(wr));
+    CHECK(fabs(correlation) < 0.5, "plate: L/R correlation %.2f", correlation);
+    // It dies away, and lasts longer with a longer decay
+    double short_late = Energy(Window(l, 1.5f, 2.f)) / tail_l;
+    CHECK(short_late < 1e-3, "plate (short): energy at 1.5-2 s is %.1f dB of the early tail", 10 * log10(short_late));
+    PlateImpulse(1.f, 4.f, l, r);
+    double long_late = Energy(Window(l, 1.5f, 2.f)) / Energy(Window(l, 0.05f, 0.3f));
+    CHECK(long_late > 10 * short_late, "plate: long decay %.1f dB vs short %.1f dB at 1.5-2 s",
+          10 * log10(long_late), 10 * log10(short_late));
+    CHECK(Energy(Window(l, 3.5f, 4.f)) < Energy(Window(l, 0.05f, 0.3f)) * 1e-2, "plate (long): still loud at 3.5 s");
+}
+
+static void TestPlateReverbClear() {
+    static bitch::PlateReverb plate;
+    plate.Init(kSampleRate);
+    plate.SetDecay(1.f);
+    float ol, orr;
+    for (int n = 0; n < 4800; n++) plate.Process(0.5f * sinf(2 * kPi * 440.f * n / kSampleRate), 0.f, ol, orr);
+    plate.Clear();
+    float peak = 0.f;
+    for (int n = 0; n < 48000; n++) {
+        plate.Process(0.f, 0.f, ol, orr);
+        peak = std::max(peak, std::max(fabsf(ol), fabsf(orr)));
+    }
+    CHECK(peak == 0.f, "plate: %g after Clear()", peak);
+}
+
 int main() {
     TestSoftQuantize();
     TestSoftClip();
@@ -1346,6 +1415,8 @@ int main() {
     TestEngineMirrorDetents();
     TestEngineTuningHand();
     TestMixAndReverb();
+    TestPlateReverb();
+    TestPlateReverbClear();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }
