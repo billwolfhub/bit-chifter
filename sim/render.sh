@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds the render tool and runs it: render.sh in.wav out.wav tune_hz [feedback] [mix]
+# Builds the render tool and runs it: render.sh in.wav out.wav [tune=Hz] [fb=] [mix=] [ring=] [carrier=Hz] [filter=Hz] [q=] [open=] [stereo=linked|mirror|rotate]
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
 mkdir -p "$HERE/out"
