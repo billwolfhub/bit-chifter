@@ -11,6 +11,7 @@
 #include "mapping.h"
 #include "radio_filter.h"
 #include "ring_mod.h"
+#include "drive.h"
 #include "random.h"
 #include <algorithm>
 #include <cstdint>
@@ -634,6 +635,37 @@ static void TestWander() {
     CHECK(differs, "wander: seeds 5 and 6 gave the same path");
 }
 
+// Drives a 1 kHz sine (amplitude 0.25); returns the last 0.5 s
+static std::vector<float> DriveSine(float amount) {
+    bitch::Drive d;
+    d.Set(amount);
+    std::vector<float> out;
+    int n = (int)kSampleRate;
+    for (int t = 0; t < n; t++) {
+        float x = 0.25f * sinf(2 * kPi * 1000.f * t / kSampleRate);
+        float y = d.Process(x);
+        if (t >= n / 2) out.push_back(y);
+    }
+    return out;
+}
+
+static void TestDrive() {
+    bitch::Drive d;
+    d.Set(0.f);
+    bool identical = true;
+    for (int t = 0; t < 1000; t++) {
+        float x = 0.25f * sinf(0.1f * t);
+        identical = identical && d.Process(x) == x;
+    }
+    CHECK(identical, "drive 0: not a pass-through");
+    auto clean = DriveSine(0.f), fuzz = DriveSine(1.f);
+    CHECK(Magnitude(clean, 3000.f) < 0.001, "drive 0: 3rd harmonic %.4f", Magnitude(clean, 3000.f));
+    CHECK(Magnitude(fuzz, 3000.f) > 0.05, "drive 1: 3rd harmonic only %.4f", Magnitude(fuzz, 3000.f));
+    float peak = 0.f;
+    for (float v : fuzz) peak = std::max(peak, fabsf(v));
+    CHECK(peak < 0.3f, "drive 1: level not compensated, peak %.3f", peak);
+}
+
 int main() {
     TestSoftClip();
     TestHilbertQuadrature();
@@ -663,6 +695,7 @@ int main() {
     TestRadioFilterSweepStable();
     TestMappings();
     TestBlips();
+    TestDrive();
     TestWander();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
