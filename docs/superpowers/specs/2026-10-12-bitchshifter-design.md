@@ -27,8 +27,8 @@ envelope follower). Local project only (`~/local_files/daisy/bitchshifter`).
 ### Faders
 | Fader | Control |
 |---|---|
-| **1 TUNE** | Shift: −2500 Hz … **0 at centre** … +2500 Hz. Response is cubic around the centre (fine mistuning near 0, wild at the ends). A recalled station replaces it until the fader moves; keyboard offsets add to it. |
-| **2 RECEPTION** | Macro, clear → lost in the noise: static and crackle level, fading depth, drift amount, AGC strength and drive all rise together. At the bottom the receiver effects are off. |
+| **1 TUNE** | The SSB **dial**: −2000 … **0 at centre** … +2000 Hz. The middle 80% of the travel is a fine, linear ±400 Hz (the musical zone, where mistuned sideband sweeps through its "overtone" snaps); the last 10% at each end accelerates to ±2 kHz for big swoops. The dial follows the fader with **inertia** (~0.25 s, soft start and stop), so moves become smooth sweeps. **Harmonic detents** gently pull the shift onto multiples of the source's pitch. A recalled station replaces it until the fader moves; keyboard offsets add to it. |
+| **2 RECEPTION** | Macro, clear → lost in the noise: static and crackle level, fading depth, drift amount, AGC strength and drive all rise together, and the **tuning hand** wanders the dial around the TUNE setting (shared by both sides, up to ±150 Hz). At the bottom the receiver effects are off. |
 
 ### Knobs
 | Knob | Control |
@@ -103,7 +103,14 @@ in doesn't click). **Movement between the sides** comes from:
      delayed one sample and Q is the B chain (sign verified by the shift tests).
    - **Feedback:** output → 2 ms delay → `tanh` soft clip → × knob 5 → added to the
      shifter input. The delay keeps the loop stable and gives the barberpole its smear.
-   - Shift = (TUNE, or the recalled station's shift) + keyboard offset + drift, glided.
+   - Shift = (TUNE through the dial inertia, or the recalled station's shift) + keyboard offset +
+     tuning hand → **harmonic detents** → per-side stereo gain + drift, glided.
+   - **Harmonic detents:** a pitch tracker (YIN on the input downsampled to 8 kHz, 60–800 Hz,
+     spread across blocks so there are no CPU spikes) reports the source's fundamental f0 and a
+     confidence. The shift goes through a soft-quantise curve,
+     `s − a·f0/(2π)·sin(2π·s/f0)`, a = 0.7 × confidence: continuous and always increasing (so the
+     dial sweeps through), but flattened around every multiple of f0, where the shifted spectrum
+     is harmonic again. Unclear pitch (noise, chords, silence) fades the detents out.
 4. **Radio filter:** two state-variable band-pass filters in series (DaisySP `Svf`),
    same centre (knob 3) and Q from knob 4 (≈ 0.7 wide → ≈ 12 narrow), with gain
    compensation so narrowing doesn't drop the level much.
