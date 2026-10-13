@@ -344,6 +344,10 @@ static void TestMappings() {
     CHECK(fabsf(q - 0.7f) < 0.01f && open == 1.f, "width 1: q %.2f open %.2f", q, open);
     bitch::FilterWidth(0.98f, q, open);
     CHECK(open == 1.f, "width 0.98: open %.2f", open);
+    CHECK(bitch::ReceptionAmount(0.f) == 0.f, "reception bottom %.3f", bitch::ReceptionAmount(0.f));
+    CHECK(bitch::ReceptionAmount(0.02f) == 0.f, "reception bottom dead zone %.3f", bitch::ReceptionAmount(0.02f));
+    CHECK(bitch::ReceptionAmount(0.98f) == 1.f, "reception top %.3f", bitch::ReceptionAmount(0.98f));
+    CHECK(fabsf(bitch::ReceptionAmount(0.5f) - 0.5f) < 0.01f, "reception middle %.3f", bitch::ReceptionAmount(0.5f));
 }
 
 // Runs the engine for `seconds` on independent sines into each input (amplitude 0 =

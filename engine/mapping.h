@@ -31,4 +31,8 @@ inline void FilterWidth(float knob, float &q, float &open) {
     open = fminf(fmaxf((knob - 0.85f) / 0.12f, 0.f), 1.f); // fully open from 97% of the turn (a knob rarely reads exactly 1.0)
 }
 
+// Fader -> reception amount 0-1, with the bottom 3% truly clean and the top 3% full
+// (a fader rarely reads exactly 0 or 1)
+inline float ReceptionAmount(float fader) { return fminf(fmaxf((fader - 0.03f) / 0.94f, 0.f), 1.f); }
+
 } // namespace bitch
