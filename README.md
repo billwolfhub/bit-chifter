@@ -73,3 +73,8 @@ Mac tests: `sim/run_tests.sh`. Listen on the Mac: `sim/render.sh in.wav out.wav 
 **Cabling note:** the outputs are stereo on one TRS jack. Into balanced interface inputs,
 use a TRS → 2× TS (insert/Y) cable. A stereo cable into a balanced input reads
 left − right, which cancels the (identical) left and right of a mono signal.
+
+## License
+
+bit-chifter is released under the [MIT License](LICENSE). It builds against
+[libDaisy](https://github.com/electro-smith/libDaisy) (MIT).
