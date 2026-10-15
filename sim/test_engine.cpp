@@ -1613,72 +1613,36 @@ static void TestPadPages() {
         t += ms;
         pp.Update(t, touched, page);
     };
-    // A tap latches; another tap unlatches; the effect starts at the touch
+    // Every pad is momentary: on from the touch, off at the release, however short or long
     step(10, 1u << 4, 0);
-    CHECK(pp.Effects() == Bit(kEchoes), "tap: not on at the touch (%08x)", pp.Effects());
+    CHECK(pp.Effects() == Bit(kEchoes), "touch: not on (%08x)", pp.Effects());
     step(100, 0, 0);
-    CHECK(pp.Effects() == Bit(kEchoes) && pp.Latched() == Bit(kEchoes), "tap: not latched (%08x)", pp.Effects());
-    step(10, 1u << 4, 0);
-    CHECK(pp.Effects() == Bit(kEchoes), "second tap: off at the touch");
-    step(100, 0, 0);
-    CHECK(pp.Effects() == 0, "second tap: still on (%08x)", pp.Effects());
-    // A hold is momentary
+    CHECK(pp.Effects() == 0, "tap: still on after release (%08x)", pp.Effects());
     step(10, 1u << 8, 1);
-    CHECK(pp.Effects() == Bit(kFadeOut), "hold: not on (%08x)", pp.Effects());
     step(500, 1u << 8, 1);
-    CHECK(pp.Effects() == Bit(kFadeOut), "hold: dropped while held");
+    CHECK(pp.Effects() == Bit(kFadeOut), "hold: dropped while held (%08x)", pp.Effects());
     step(10, 0, 1);
     CHECK(pp.Effects() == 0, "hold: still on after release (%08x)", pp.Effects());
-    // Holding a latched effect turns it off at the release
-    step(10, 1u << 0, 2);
-    step(50, 0, 2);
-    CHECK(pp.Latched() == Bit(kRing100), "latch ring 100%%");
-    step(10, 1u << 0, 2);
-    step(400, 1u << 0, 2);
-    CHECK(pp.Effects() == Bit(kRing100), "hold on latched: off while held");
+    // Several pads at once
+    step(10, (1u << 0) | (1u << 2), 2);
+    CHECK(pp.Effects() == (Bit(kRing100) | Bit(kCarrierX2)), "two pads: %08x", pp.Effects());
+    step(10, 1u << 2, 2);
+    CHECK(pp.Effects() == Bit(kCarrierX2), "release one of two: %08x", pp.Effects());
     step(10, 0, 2);
-    CHECK(pp.Effects() == 0, "hold on latched: still on after release (%08x)", pp.Effects());
-    // Latches survive page changes; the same pad on another page is another effect
-    step(10, 1u << 6, 0);
-    step(50, 0, 0);
-    step(10, 0, 2);
-    CHECK(pp.Effects() == Bit(kSpiralUp), "page change dropped a latch (%08x)", pp.Effects());
-    step(10, 1u << 6, 2);
-    step(50, 0, 2);
-    CHECK(pp.Effects() == (Bit(kSpiralUp) | Bit(kStutter)), "two pages' latches (%08x)", pp.Effects());
     // A held pad keeps the effect of the page it was touched on
     step(10, 1u << 3, 0);
     step(100, 1u << 3, 1);
-    CHECK(pp.Effects() == (Bit(kSpiralUp) | Bit(kStutter) | Bit(kReverseEchoes)), "held pad changed page (%08x)",
-          pp.Effects());
+    CHECK(pp.Effects() == Bit(kReverseEchoes), "held pad changed page (%08x)", pp.Effects());
     step(300, 0, 1);
-    CHECK(pp.Effects() == (Bit(kSpiralUp) | Bit(kStutter)), "held pad: still on after release (%08x)", pp.Effects());
-    // TOU tap: one stereo step, on the release
+    CHECK(pp.Effects() == 0, "held pad: still on after release (%08x)", pp.Effects());
+    // TOU tap: one stereo step, on the release; a long TOU touch does nothing
     step(10, 1u << 10, 0);
     CHECK(pp.TakeStereoSteps() == 0, "TOU: stepped at the touch");
     step(100, 0, 0);
-    CHECK(pp.TakeStereoSteps() == 1 && !pp.TakeCleared(), "TOU tap: no stereo step");
-    // TOU hold 1 s: clears the latches (once), no stereo step; a held pad stays on
-    for (int i = 0; i < 110; i++) step(10, (1u << 10) | (1u << 5), 0);
-    CHECK(pp.TakeCleared() && !pp.TakeCleared(), "TOU hold: not cleared exactly once");
-    CHECK(pp.Latched() == 0 && pp.Effects() == Bit(kPingPongEchoes), "TOU hold: left %08x", pp.Effects());
-    step(10, 0, 0);
-    CHECK(pp.TakeStereoSteps() == 0 && pp.Effects() == 0, "TOU hold: stepped the stereo mode, or left %08x",
-          pp.Effects());
-    // TOU held 0.6 s (longer than a tap, shorter than a clear): neither a stereo step nor a clear
-    step(10, 1u << 7, 0);
-    step(50, 0, 0);
-    step(10, 1u << 10, 0);
+    CHECK(pp.TakeStereoSteps() == 1, "TOU tap: no stereo step");
     for (int i = 0; i < 60; i++) step(10, 1u << 10, 0);
     step(10, 0, 0);
-    CHECK(pp.TakeStereoSteps() == 0 && !pp.TakeCleared() && pp.Latched() == Bit(kSpiralDown),
-          "TOU held 0.6 s: a stereo step or a clear (latched %08x)", pp.Latched());
-    // TOU released at exactly 1 s, with no update in between at 1 s or more: a clear
-    step(10, 1u << 10, 0);
-    for (int i = 0; i < 99; i++) step(10, 1u << 10, 0);
-    step(10, 0, 0);
-    CHECK(pp.TakeCleared() && pp.TakeStereoSteps() == 0 && pp.Latched() == 0,
-          "TOU released at 1 s: not a clear (latched %08x)", pp.Latched());
+    CHECK(pp.TakeStereoSteps() == 0, "TOU 0.6 s: stepped the stereo mode");
 }
 
 static void TestLowBlip() {

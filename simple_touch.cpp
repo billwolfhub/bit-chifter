@@ -1,13 +1,19 @@
 // bit-chifter for the Synthux Simple Touch: ring mod, shifter, radio filter, stereo.
 // Fader 1 TUNE (the SSB dial: fine +-400 Hz around 0 at the centre, swoop zones to +-2 kHz at the
 // ends, glides like a heavy dial, harmonic detents), fader 2 RECEPTION (clean to lost in the noise), knob 1 RING, knob 2 CARRIER, knob 3 FILTER,
-// knob 4 WIDTH, knob 5 FEEDBACK, knob 6 MIX (its last 15% adds reverb); the "TOU" logo pad steps the stereo mode
-// (Linked / Mirror / Rotate, with 1/2/3 confirmation blips). The CPU load and the
+// knob 4 WIDTH, knob 5 FEEDBACK, knob 6 MIX (its last 15% adds reverb). Switch 1 picks the page of pad
+// effects (Shift & time / Radio / Digital & damage): a pad's effect is on while it's held, and
+// RECEPTION also sets how strong they are. Built so far: feedback burst, dial spins, static burst,
+// squelch, signal fade-out, filter slam, drift to maximum, ring 100%, carrier x2, kill dry, hold drift.
+// The "TOU" logo pad: a tap steps the stereo mode (Linked / Mirror / Rotate, with 1/2/3 confirmation
+// blips). The CPU load and the
 // controls are printed over USB serial once a second.
 #include "daisy_seed.h"
 #include "engine.h"
 #include "mapping.h"
 #include "blips.h"
+#include "effects.h"
+#include "ui/pad_pages.h"
 #include "util/CpuLoadMeter.h"
 
 #include <cstdarg>
@@ -25,7 +31,6 @@ const int kInputWidth = 4;    // knob 4
 const int kInputFeedback = 0; // knob 5
 const int kInputMix = 5;      // knob 6
 const int kInputReception = 7; // fader 2
-const int kPadStereoMode = 10; // "TOU" of the TOUCH logo
 
 DaisySeed hw;
 AnalogControl controls[8];
@@ -37,6 +42,10 @@ DSY_SDRAM_BSS bitch::PlateReverb plate;
 CpuLoadMeter cpu;
 Mpr121I2C pads;
 bitch::Blips blips;
+Switch3 page_switch;           // switch 1 (left): the page; reads mirror-image (README)
+bitch::PadPages pad_pages;     // pads -> effects (on while held), TOU tap -> stereo mode
+volatile uint32_t effects = 0; // from the pads (main loop) to the engine (audio callback)
+volatile int page = 0;         // for the report
 volatile int blip_samples = 0; // diagnostic: non-zero blip samples since the last report
 volatile int stereo_mode = 0; // 0 Linked, 1 Mirror, 2 Rotate (cycled by the TOU pad)
 volatile float in_peak[2], out_peak[2]; // diagnostic: block peaks since the last report
@@ -56,6 +65,8 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
     bitch::FilterWidth(Read(kInputWidth), p.filter_q, p.filter_open);
     p.reception = bitch::ReceptionAmount(Read(kInputReception));
     p.stereo_mode = (bitch::StereoMode)stereo_mode;
+    p.effects = effects;
+    p.effect_amount = bitch::EffectAmount(p.reception);
     p.detent = 0.7f;          // harmonic detents, medium
     p.dial_inertia_s = 0.06f; // TUNE glides like a heavy dial (two 60 ms stages)
     engine.Process(in[0], in[1], out[0], out[1], size, p);
@@ -113,21 +124,25 @@ int main(void) {
     Mpr121I2C::Config pad_config;
     bool pads_ok = pads.Init(pad_config) == Mpr121I2C::OK;
     blips.Init(hw.AudioSampleRate());
+    page_switch.Init(seed::D9, seed::D8);
     hw.StartAudio(AudioCallback);
 
     static const char *mode_names[3] = {"linked", "mirror", "rotate"};
-    bool was_touched = false;
     uint32_t last_report = System::GetNow();
     while (1) {
         System::Delay(10);
-        // TOU pad: each new touch steps the stereo mode; 1, 2 or 3 blips say which
-        bool touched = pads_ok && (pads.Touched() & (1 << kPadStereoMode));
-        if (touched && !was_touched) {
-            stereo_mode = (stereo_mode + 1) % 3;
-            // Blips::Start is safe from the main loop (atomic request)
-            blips.Start(stereo_mode + 1);
+        // Pads and switch 1: the strange pages (each pad's effect is on while it's held); a TOU
+        // tap steps the stereo mode (1, 2 or 3 blips).
+        // Switch 1 physically left reads POS_RIGHT: left = page 1, centre = page 2, right = page 3.
+        int position = page_switch.Read();
+        page = position == Switch3::POS_RIGHT ? 0 : (position == Switch3::POS_CENTER ? 1 : 2);
+        pad_pages.Update(System::GetNow(), pads_ok ? pads.Touched() : 0u, page);
+        effects = pad_pages.Effects();
+        int steps = pad_pages.TakeStereoSteps();
+        if (steps > 0) {
+            stereo_mode = (stereo_mode + steps) % 3;
+            blips.Start(stereo_mode + 1); // Blips::Start is safe from the main loop (atomic request)
         }
-        was_touched = touched;
         if (System::GetNow() - last_report < 1000) continue;
         last_report = System::GetNow();
         auto db = [](float v) { return v > 0.0000112f ? (int)lrintf(20.f * log10f(v)) : -99; };
@@ -142,7 +157,7 @@ int main(void) {
         // One message per second, two lines
         Report("CPU %d%% max %d%% | tune %d Hz fb %d%% mix %d%% rev %d%% rec %d%% | ring %d%% car %d Hz | "
                      "filt %d Hz q %d.%d open %d%%\r\n"
-               "  %s%s | in L %d R %d dB | out L %d R %d dB | blip samples %d | pitch %s",
+               "  %s%s | in L %d R %d dB | out L %d R %d dB | blip samples %d | pitch %s | page %d fx %08lx",
                      (int)(cpu.GetAvgCpuLoad() * 100.f), (int)(cpu.GetMaxCpuLoad() * 100.f),
                      (int)bitch::TuneHz(Read(kInputTune)), (int)(Read(kInputFeedback) * 100.f),
                      (int)(mix * 100.f), (int)(reverb * 100.f),
@@ -150,7 +165,7 @@ int main(void) {
                      (int)bitch::CarrierHz(Read(kInputCarrier)), (int)bitch::FilterHz(Read(kInputFilter)),
                      (int)q, (int)(q * 10.f) % 10, (int)(open * 100.f), mode_names[stereo_mode],
                pads_ok ? "" : " (pads not found)", db(in_peak[0]), db(in_peak[1]), db(out_peak[0]),
-               db(out_peak[1]), blip_samples, pitch);
+               db(out_peak[1]), blip_samples, pitch, page + 1, (unsigned long)effects);
         blip_samples = 0;
         in_peak[0] = in_peak[1] = out_peak[0] = out_peak[1] = 0.f;
         cpu.Reset();

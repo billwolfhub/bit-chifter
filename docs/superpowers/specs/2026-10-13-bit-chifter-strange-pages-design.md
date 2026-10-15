@@ -14,16 +14,13 @@ Main spec: `2026-10-12-bitchshifter-design.md` (faders, knobs, signal chain, saf
   see README.)
 - **Switch 2 (right switch): capture.** Physically left = **Normal** (live input),
   middle = **Freeze**, right = **Loop** (see Capture).
-- **Pads (10 per page):**
-  - **Tap** (released within 0.3 s) **latches**: an effect that was off stays on; one
-    that was latched turns off.
-  - **Hold** (0.3 s or longer) is **momentary**: on while held, off on release (even if it
-    was latched before).
-  - The effect starts the moment the pad is touched, in both cases.
-  - Effects from all pages stack. A latched effect stays on when the page changes; a held
-    one stays on until its pad is released.
-- **TOU logo pad:** a tap steps the stereo mode, as now; **holding it 1 s clears every
-  latched effect** (confirmed by one low blip).
+- **Pads (10 per page):** every pad is **momentary**: its effect is on from the touch until
+  the release. Hold several at once to stack them. A held pad keeps the effect of the page it
+  was touched on. (Changed 2026-10-14 after playing it: the earlier tap-to-latch made it easy
+  to leave effects on unnoticed, e.g. fade-out silencing everything; momentary pads are easier
+  to experiment with.)
+- **TOU logo pad:** a tap steps the stereo mode, as before (counted on the release, within
+  0.3 s).
 - **CH logo pad:** still reserved.
 - **RECEPTION (fader 2) is also the effect amount:** every active effect uses
   `amount = 0.35 + 0.65 × reception`, so an effect is clearly audible with the fader at
@@ -127,9 +124,9 @@ These sit after the radio filter, before the AGC (so the AGC pumps on the damage
 - **Carrier ×2:** the ring-mod carrier an octave up.
 - **Kill dry:** the dry signal muted (wet only).
 - **Hold drift:** the reception wander and drift freeze where they are.
-- **Chaos:** a tap turns on a new random set of 2–3 effects from the other 29 pads (a
-  separate "chaos set", which replaces the previous one; the user's own latches are left
-  alone). A hold turns the chaos set off on release. Clear-all (hold TOU) clears it too.
+- **Chaos:** a touch turns on a new random set of 2–3 effects from the other 29 pads (a
+  separate "chaos set"). With momentary pads: while the Chaos pad is held, a random set is
+  on; each new touch rolls a new set.
 
 ## Capture (switch 2)
 
@@ -154,7 +151,7 @@ At the input, before Drive, so the whole chain (dry included) processes the capt
   Each effect is a small class with `Init` and `Process`, tested on the Mac. The engine
   reads the bits; nothing in it knows about pads.
 - **Pad logic (`ui/pad_pages.h`, hardware-free):** turns touches, the page switch, TOU and
-  the clock into the effects bits (tap/hold, latches, clear-all, chaos), so it can be
+  the clock into the effects bits (momentary pads, TOU tap, chaos), so it can be
   tested on the Mac. `simple_touch.cpp` only reads the hardware and calls it.
 - **Signal chain (changes in bold):**
   1. **Capture**
@@ -184,13 +181,13 @@ At the input, before Drive, so the whole chain (dry included) processes the capt
   sample-to-sample jump bounded); its main behaviour (e.g. echo time, crush bits, carrier
   pitch follows the dial, inversion maps 1 kHz to the expected frequency).
 - Capture: Freeze and Loop repeat the captured audio; returning to Normal is click-free.
-- Pad logic: tap latches and unlatches, hold is momentary, page changes keep latches,
-  TOU hold clears, chaos picks 2–3 other effects and replaces its previous set.
+- Pad logic: pads are on while held (several at once), a held pad keeps its page's effect,
+  TOU tap steps the stereo mode, chaos picks 2–3 other effects per touch.
 - Renders for the user at each step; hardware: flash, play, CPU with everything on.
 
 ## Build order (one plan each; renders, then flashing, after each)
 
-1. **Pages:** the page switch, pad logic (tap/hold, latches, TOU clear-all), the effects
+1. **Pages:** the page switch, pad logic (momentary pads, TOU tap), the effects
    bits in the engine, and the cheap effects: feedback burst, static burst, signal
    fade-out, drift to maximum, filter slam, squelch, ring 100%, carrier ×2, kill dry, hold
    drift, dial spin up/down. Other pads do nothing until their step.

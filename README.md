@@ -51,23 +51,25 @@ pulses), and read the output with `cat /dev/cu.usbmodem*`.
 | Control | Does |
 |---|---|
 | Fader 1 TUNE | The SSB dial: fine ±400 Hz over the middle 80%, swoop zones to ±2 kHz at the ends; glides like a heavy dial; harmonic detents catch the shift at multiples of the source's pitch |
-| Fader 2 RECEPTION | Clean (bottom) → lost in the noise (top): the sides drift apart, the signal fades, static and crackles rise, the AGC pumps, the input is driven, and the dial wanders on its own |
+| Fader 2 RECEPTION | Clean (bottom) → lost in the noise (top): the sides drift apart, the signal fades, static and crackles rise, the AGC pumps, the input is driven, and the dial wanders on its own; also how strong the pad effects are |
 | Knob 1 RING | Ring-mod amount |
 | Knob 2 CARRIER | Ring-mod carrier, 0.1 Hz (tremolo) – 5 kHz (bells) |
 | Knob 3 FILTER | Radio filter centre, 150 Hz – 5 kHz |
 | Knob 4 WIDTH | Radio filter: narrow and whistly → wide → fully open (from about 97% of the turn) |
 | Knob 5 FEEDBACK | Feedback 0–95% (barberpole) |
 | Knob 6 MIX | Dry/wet over the first 85% of the turn; the last 15% stays fully wet and adds a light stereo plate reverb (longer as it rises) |
-| "TOU" logo pad | Stereo mode: 1 blip Linked, 2 Mirror, 3 Rotate (8 s) |
+| Switch 1 (left switch) | Page of pad effects: left = Shift & time, centre = Radio, right = Digital & damage |
+| Pads | Each pad's effect is on while it's held (hold several to stack them; see the strange pages spec). Built so far: page 1 bottom left/right dial spin down/up, top centre feedback burst; page 2 top left static burst, top right squelch, bottom left signal fade-out, bottom right filter slam, top centre drift to maximum; page 3 top left ring 100%, top right carrier ×2, bottom left kill dry, top centre hold drift. The other pads do nothing yet |
+| "TOU" logo pad | Tap: stereo mode (1 blip Linked, 2 Mirror, 3 Rotate (8 s)) |
 
 Stereo in, stereo out; a mono source in one input feeds both sides at full level (a side
 counts as unused after 3 s of silence). CPU about 22% (part 3).
 
 Build and flash: `make`, then RESET, BOOT while the LED pulses, `make program-dfu`.
 Over USB serial (`cat /dev/cu.usbmodem*`), once a second: CPU load, the
-control values, the stereo mode, the input/output peak levels, a blip counter and the tracked pitch of the input (`--` when it isn't clear). The report is
+control values, the stereo mode, the input/output peak levels, a blip counter, the tracked pitch of the input (`--` when it isn't clear), the page and the active effects (`fx`, one bit per effect in `engine/effects.h`). The report is
 sent without waiting (libDaisy's logger blocks the main loop when nothing reads the port).
-Mac tests: `sim/run_tests.sh`. Listen on the Mac: `sim/render.sh in.wav out.wav [tune=Hz] [fb=] [mix=] [ring=] [carrier=Hz] [filter=Hz] [q=] [open=] [reception=] [detent=] [inertia=] [reverb=0-1] [sweep=Hz] [stereo=linked|mirror|rotate]`.
+Mac tests: `sim/run_tests.sh`. Listen on the Mac: `sim/render.sh in.wav out.wav [tune=Hz] [fb=] [mix=] [ring=] [carrier=Hz] [filter=Hz] [q=] [open=] [reception=] [detent=] [inertia=] [reverb=0-1] [amount=] [effects=name,name] [every=s] [sweep=Hz] [stereo=linked|mirror|rotate]`.
 `leveltest/`: input DC/peak/audio levels over USB, with a test tone or passthrough on switch 1.
 
 **Cabling note:** the outputs are stereo on one TRS jack. Into balanced interface inputs,
