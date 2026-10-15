@@ -26,6 +26,7 @@
 #include "carriers.h"
 #include "morse_chimes.h"
 #include "selcall.h"
+#include "jammer.h"
 #include <algorithm>
 #include <cstdint>
 
@@ -2255,6 +2256,38 @@ static void TestSelcall() {
     CHECK(Peak(x) == 0.f, "selcall: Stop() didn't drop the burst (%g)", Peak(x));
 }
 
+static void TestJammer() {
+    bitch::Jammer j;
+    j.Init(kSampleRate, 6u);
+    std::vector<float> x, sweep;
+    for (int b = 0; b < (int)(1.f * kSampleRate / 48); b++) {
+        j.Update(1.f, 1.f, 48.f / kSampleRate);
+        for (int k = 0; k < 48; k++) x.push_back(j.Process());
+        sweep.push_back(j.ToneHz());
+    }
+    // A sawtooth sweep 300 Hz -> 3 kHz, 4 times a second at amount 1
+    float lo = 1e9f, hi = 0.f;
+    int resets = 0;
+    for (size_t k = 1; k < sweep.size(); k++) {
+        lo = std::min(lo, sweep[k]);
+        hi = std::max(hi, sweep[k]);
+        resets += sweep[k] < 0.5f * sweep[k - 1];
+    }
+    CHECK(lo >= 299.f && lo < 350.f && hi > 2700.f && hi <= 3001.f, "jammer sweep %.0f-%.0f Hz", lo, hi);
+    CHECK(resets >= 3 && resets <= 5, "jammer: %d sweeps in 1 s at amount 1 (want ~4)", resets);
+    float loud = Rms(x);
+    CHECK(loud > 0.05f && Peak(x) <= 1.f, "jammer: rms %.3f, peak %.3f", loud, Peak(x));
+    // Quieter and slower at amount 0.35
+    bitch::Jammer q;
+    q.Init(kSampleRate, 6u);
+    std::vector<float> y;
+    for (int b = 0; b < (int)(1.f * kSampleRate / 48); b++) {
+        q.Update(0.35f, 1.f, 48.f / kSampleRate);
+        for (int k = 0; k < 48; k++) y.push_back(q.Process());
+    }
+    CHECK(Rms(y) < 0.5f * loud, "jammer at 0.35: rms %.3f vs %.3f", Rms(y), loud);
+}
+
 int main() {
     TestSoftQuantize();
     TestSoftClip();
@@ -2341,6 +2374,7 @@ int main() {
     TestCarriers();
     TestMorseChimes();
     TestSelcall();
+    TestJammer();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }
