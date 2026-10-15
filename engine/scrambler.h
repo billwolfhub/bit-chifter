@@ -14,7 +14,7 @@ namespace bitch {
 // inversion frequency f (0..f becomes f..0). Band-limited in and out like a real scrambler:
 // the input is high-passed at 250 Hz (2nd-order Butterworth; this also keeps DC from coming
 // out as a tone at f) and low-passed at 0.75 f (8th-order Butterworth), so what's above f is
-// removed rather than folded back (just above f: at least 30 dB down); then split into I and
+// removed rather than folded back (just above f: about 30 dB down or more); then split into I and
 // Q, and mixed with an oscillator at f taking the opposite sideband from the shifter's:
 // i*cos - q*sin; and the output is high-passed at 250 Hz again (what's left of the fold-back
 // lands low, so this takes it further down).

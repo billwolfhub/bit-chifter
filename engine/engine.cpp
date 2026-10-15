@@ -241,7 +241,9 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
     const float scramble_from = scramble_level_, scramble_to = fmaxf(level_[kScrambler], level_[kHoppingScrambler]);
     scramble_level_ = scramble_to;
     const bool scrambling = scramble_from > 0.f || scramble_to > 0.f;
-    const bool hopping = level_[kHoppingScrambler] > 0.f && !Has(fx, kScrambler);
+    // Hopping while its pad is held (with or without the plain pad), and through its fade-out
+    // unless the plain pad is still held
+    const bool hopping = Has(fx, kHoppingScrambler) || (level_[kHoppingScrambler] > 0.f && !Has(fx, kScrambler));
     if (scrambling) {
         if (!scrambler_running_) {
             for (Scrambler &s : scrambler_) s.Reset();

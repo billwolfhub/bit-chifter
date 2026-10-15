@@ -2120,6 +2120,24 @@ static void TestScrambler() {
           (int)in_range);
 }
 
+// Both scrambler pads held: it still hops (Hopping adds the hops to the plain scrambler)
+static void TestEffectScramblerBothPads() {
+    auto run = [](uint32_t effects) {
+        bitch::Engine e;
+        e.Init(kSampleRate);
+        bitch::Params p;
+        p.effect_amount = 1.f;
+        p.effects = effects;
+        std::vector<float> l, r;
+        int n = 0;
+        RunFor(e, p, 2.f, [](int k) { return Sine(500.f, 0.25f, k); }, n, l, r);
+        return Magnitude(Window(l, 1.f, 2.f), 700.f); // the plain inversion at 1.2 kHz puts 500 Hz at 700 Hz
+    };
+    double plain = run(bitch::Bit(bitch::kScrambler));
+    double both = run(bitch::Bit(bitch::kScrambler) | bitch::Bit(bitch::kHoppingScrambler));
+    CHECK(both < 0.5 * plain, "both scrambler pads: no hops (700 Hz %.4f vs plain %.4f)", both, plain);
+}
+
 static void TestEffectScrambler() {
     for (int on = 0; on < 2; on++) {
         bitch::Engine e;
@@ -2548,6 +2566,7 @@ int main() {
     TestEffectsStable();
     TestScrambler();
     TestEffectScrambler();
+    TestEffectScramblerBothPads();
     TestCarriers();
     TestMorseChimes();
     TestSelcall();
