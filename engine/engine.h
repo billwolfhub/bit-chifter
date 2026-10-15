@@ -15,6 +15,7 @@
 #include "plate_reverb.h"
 #include "effects.h"
 #include "scrambler.h"
+#include "rotor.h"
 #include "carriers.h"
 #include "morse_chimes.h"
 #include "selcall.h"
@@ -138,6 +139,9 @@ class Engine {
     MorseChimes morse_[2];
     Selcall selcall_;        // mono, into both inputs
     Jammer jammer_;          // mono, into both sides' receivers
+    // The scrambler's and Selcall's levels at the end of the last block: ramped across each block
+    // from there (Carriers, Morse chimes and the jammer ramp their own gains)
+    float scramble_level_ = 0.f, selcall_level_ = 0.f;
 };
 
 } // namespace bitch

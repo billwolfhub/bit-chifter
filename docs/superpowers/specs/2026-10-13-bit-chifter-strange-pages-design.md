@@ -83,21 +83,28 @@ when off, and fades in and out over 10–30 ms so switching never clicks.
 ### Page 2: Radio
 
 - **Scrambler:** spectral inversion, like an old radio voice scrambler: the spectrum is
-  turned upside down around an inversion frequency (the analytic signal is conjugated and
-  shifted up by it, then low-passed at it), from 3.4 kHz (a = 0.35) down to 1.2 kHz
-  (a = 1). It sits after Drive, before the ring mod.
+  turned upside down around an inversion frequency f (the analytic signal is conjugated and
+  shifted up by f), from 3.4 kHz (a = 0.35) down to 1.2 kHz (a = 1). Band-limited in and
+  out like a real scrambler: a 250 Hz high-pass (2nd order) before and after the inversion,
+  and an 8th-order low-pass at 0.75 f before it, so what's above f is removed rather than
+  folded back (just above f, at least 30 dB down; review 2026-10-15). It sits after Drive,
+  before the ring mod.
 - **Hopping scrambler:** like Scrambler, but the inversion frequency jumps to a random
   value between 1 and 4 kHz every 1.5 s (a = 0.35) to 0.1 s (a = 1), with 5 ms crossfades.
   Either scrambler pad turns the scrambler on; Hopping adds the hops.
 - **Passing carriers:** 2 (a = 0.35) to 6 (a = 1) hidden "stations": steady sine carriers
-  at random fixed positions within ±2.5 kHz of the dial. You hear each at its offset from
-  the dial, so moving TUNE sweeps them through high, zero and back (heterodyne whistles).
+  at random fixed positions within ±2.5 kHz of the dial. You hear each at its position plus
+  the dial's shift, so TUNE moves them the same way as the voice (a real receiver retunes
+  everything together), sweeping them through high, zero beat and back (heterodyne
+  whistles). Within 200 Hz of zero beat each fades out smoothly (no DC or subsonic thump).
   Level −30 to −12 dBFS with a; they drift slowly. Mixed in after the shifter, before the
   radio filter.
 - **Selcall** (added 2026-10-15, taking Morse chimes' first pad; reference renders showed the user's
   remembered "scale-like chimes" were close to selcall): while held, random 5-tone selcall
-  bursts (the ZVEI tone set, 70 ms per tone, or CCIR, 100 ms; a repeated digit uses the
-  repeat tone), at about −14 dBFS with 4 ms tone edges, firing every 2 s (a = 0.35) down to
+  bursts (the ZVEI tone set, 70 ms per tone, or CCIR, 100 ms; a digit repeating the one
+  before is sent as the repeat tone, 2600 Hz ZVEI or 2110 Hz CCIR, but not right after a
+  repeat tone: d,d,d is sent d,R,d), the tones following on without gaps (phase-continuous),
+  at about −14 dBFS with 4 ms edges only at the burst's start and end, firing every 2 s (a = 0.35) down to
   every 0.4 s (a = 1), the first one at the touch. They are mixed into the input **before the
   shifter**, so TUNE mistunes them like a real receiver (and the detents can snap them back
   in tune), and the radio filter, reception and damage shape them like any station.
@@ -110,7 +117,8 @@ when off, and fades in and out over 10–30 ms so switching never clicks.
 - **Morse chimes** (replaced Drift to maximum on 2026-10-15, which RECEPTION at the top
   already gave): 1–3 carriers keyed in random Morse-like dits and dahs (12–25 words per
   minute), each key-down a tone with a soft attack and a bell-like decay, so they chime.
-  Their pitch follows the dial like the passing carriers.
+  Their pitch follows the dial like the passing carriers (moving with TUNE, faded out within
+  200 Hz of zero beat).
 - **Filter slam:** the radio filter jumps to its narrowest and most resonant.
 
 ### Page 3: Digital & damage

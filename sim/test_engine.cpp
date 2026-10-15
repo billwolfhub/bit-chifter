@@ -1821,7 +1821,7 @@ static float NoClickWorstRatio(uint32_t seed) {
     const size_t segment = (size_t)(0.05f * kSampleRate), fade = (size_t)(0.035f * kSampleRate);
     for (int i = 0; i < kToggles; i++) {
         seed = seed * 1664525u + 1013904223u;
-        bitch::Effect fx = kToggled[(seed >> 16) % 8];
+        bitch::Effect fx = kToggled[(seed >> 16) % (sizeof(kToggled) / sizeof(kToggled[0]))];
         bool release = fx == bitch::kSquelch && bitch::Has(p.effects, fx);
         p.effects ^= bitch::Bit(fx);
         size_t from = l.size();
@@ -2085,6 +2085,23 @@ static void TestScrambler() {
     s.Reset();
     w = Window(RunScrambler(s, 1.f, false, 0.5f, 3000.f), 0.25f, 0.5f);
     CHECK(Rms(w) < 0.02f, "scrambler: 3 kHz above a 1.2 kHz inversion still %.4f", Rms(w));
+    // Band-limited like a real scrambler: just above the inversion frequency doesn't fold back
+    // into the band, and DC doesn't leak out as a tone at f
+    s.Reset();
+    float in_band = Rms(Window(RunScrambler(s, 1.f, false, 0.5f, 400.f), 0.25f, 0.5f));
+    for (float hz : {1300.f, 1400.f}) {
+        s.Reset();
+        float above = Rms(Window(RunScrambler(s, 1.f, false, 0.5f, hz), 0.25f, 0.5f));
+        CHECK(Db(above / in_band) < -30.0, "scrambler at 1.2 kHz: %.0f Hz folds back at %.1f dB", hz,
+              Db(above / in_band));
+    }
+    s.Reset();
+    std::vector<float> dc;
+    for (int b = 0; b < (int)(0.5f * kSampleRate / 48); b++) {
+        s.Update(1.f, false, 48.f / kSampleRate);
+        for (int k = 0; k < 48; k++) dc.push_back(s.Process(0.25f));
+    }
+    CHECK(Rms(Window(dc, 0.25f, 0.5f)) < 1e-3f, "scrambler: DC in leaks out at %g", Rms(Window(dc, 0.25f, 0.5f)));
     // Hopping at amount 1: a new inversion frequency every 0.1 s, between 1 and 4 kHz
     s.Reset();
     std::vector<float> seen;
@@ -2156,12 +2173,12 @@ static void TestCarriers() {
     for (int k = 0; k < 6; k++)
         CHECK(fabsf(c.Position(k)) <= 2500.f && fabsf(c.Position(k)) >= 150.f, "station %d at %.0f Hz", k,
               c.Position(k));
-    // Heard at its offset from the dial (20 ms windows: the stations drift by up to 20 Hz)
+    // Heard at position + dial (20 ms windows: the stations drift by up to 20 Hz)
     float s0 = c.Position(0);
     auto w = Window(RunCarriers(c, 0.35f, 0.f, 1.f), 0.5f, 0.52f);
     CHECK(Magnitude(w, fabsf(s0)) > 0.005, "carriers, dial 0: station 0 (%.0f Hz) only %.5f", s0,
           Magnitude(w, fabsf(s0)));
-    float dial = s0 > 0.f ? s0 - 300.f : s0 + 300.f; // 300 Hz from the station
+    float dial = s0 > 0.f ? 300.f - s0 : -300.f - s0; // heard at position + dial: 300 Hz
     w = Window(RunCarriers(c, 0.35f, dial, 1.f), 0.5f, 0.52f);
     CHECK(Magnitude(w, 300.f) > 5 * Magnitude(w, fabsf(s0)), "carriers, dial %.0f: 300 Hz %.5f vs %.0f Hz %.5f",
           dial, Magnitude(w, 300.f), fabsf(s0), Magnitude(w, fabsf(s0)));
@@ -2191,7 +2208,7 @@ static void TestMorseChimes() {
         was_on = now_on;
     }
     CHECK(on > 40 && off > 40 && edges >= 16, "morse: %d windows on, %d off, %d edges in 4 s", on, off, edges);
-    // At the keyer's offset from the dial
+    // At the keyer's place (dial 0)
     float hz = fabsf(m.Position(0));
     CHECK(Magnitude(x, hz) > 5 * Magnitude(x, hz * 1.5f), "morse: %.0f Hz %.5f vs %.0f Hz %.5f", hz,
           Magnitude(x, hz), hz * 1.5f, Magnitude(x, hz * 1.5f));
@@ -2225,7 +2242,7 @@ static int CountBursts(const std::vector<float> &x) {
 
 static void TestSelcall() {
     const float kZvei[11] = {2400, 1060, 1160, 1270, 1400, 1530, 1670, 1830, 2000, 2200, 2600};
-    const float kCcir[11] = {1981, 1124, 1197, 1275, 1358, 1446, 1540, 1640, 1747, 1860, 2400};
+    const float kCcir[11] = {1981, 1124, 1197, 1275, 1358, 1446, 1540, 1640, 1747, 1860, 2110};
     bitch::Selcall s;
     s.Init(kSampleRate, 4u);
     // The first burst fires at the touch, with tones from one of the two sets
@@ -2255,6 +2272,24 @@ static void TestSelcall() {
     s.Stop();
     x = RunSelcall(s, false, 1.f, 0.2f);
     CHECK(Peak(x) == 0.f, "selcall: Stop() didn't drop the burst (%g)", Peak(x));
+    // A digit repeating the one before is sent as the repeat tone, but not after a repeat tone
+    const int kDigits[2][5] = {{3, 3, 3, 3, 5}, {1, 2, 2, 2, 2}}, kWant[2][5] = {{3, 10, 3, 10, 5}, {1, 2, 10, 2, 10}};
+    for (int d = 0; d < 2; d++) {
+        int symbols[5];
+        bitch::Selcall::Symbols(kDigits[d], symbols);
+        CHECK(std::equal(symbols, symbols + 5, kWant[d]), "selcall: digits %d%d%d%d%d sent as %d %d %d %d %d",
+              kDigits[d][0], kDigits[d][1], kDigits[d][2], kDigits[d][3], kDigits[d][4], symbols[0], symbols[1],
+              symbols[2], symbols[3], symbols[4]);
+    }
+    // The tones within a burst follow on without a gap (edges only at the burst's start and end)
+    s.Init(kSampleRate, 4u);
+    tones.clear();
+    x = RunSelcall(s, true, 1.f, 0.3f, &tones);
+    int change = 0;
+    for (int b = 1; b < (int)tones.size() && !change; b++)
+        if (tones[b] != tones[b - 1]) change = b;
+    std::vector<float> join(x.begin() + change * 48 - 24, x.begin() + change * 48 + 72);
+    CHECK(change > 0 && Peak(join) > 0.15f, "selcall: the join between tones dips to %.3f", Peak(join));
 }
 
 static void TestJammer() {
@@ -2287,6 +2322,86 @@ static void TestJammer() {
         for (int k = 0; k < 48; k++) y.push_back(q.Process());
     }
     CHECK(Rms(y) < 0.5f * loud, "jammer at 0.35: rms %.3f vs %.3f", Rms(y), loud);
+}
+
+// Two one-pole low-passes at `hz`: the RMS of what's below it
+static float LowPassRms(const std::vector<float> &x, float hz) {
+    float k = 1.f - expf(-2.f * kPi * hz / kSampleRate), a = 0.f, b = 0.f;
+    std::vector<float> y;
+    for (float v : x) {
+        a += k * (v - a);
+        b += k * (a - b);
+        y.push_back(b);
+    }
+    return Rms(y);
+}
+
+static double Mean(const std::vector<float> &x) {
+    double sum = 0.0;
+    for (float v : x) sum += v;
+    return x.empty() ? 0.0 : sum / x.size();
+}
+
+// Tuned onto a station (zero beat) it fades out, instead of putting out DC and subsonic signal
+static void TestRadioZeroBeat() {
+    bitch::Carriers c;
+    c.Init(kSampleRate, kSampleRate / 48.f, 3u);
+    auto x = Window(RunCarriers(c, 0.35f, -c.Position(0), 2.f), 0.5f, 2.f); // heard at position + dial: 0 Hz
+    CHECK(fabs(Mean(x)) < 1e-3 && LowPassRms(x, 20.f) < 1e-3f, "carriers at zero beat: mean %g, below 20 Hz %g",
+          Mean(x), LowPassRms(x, 20.f));
+    bitch::MorseChimes m;
+    m.Init(kSampleRate, kSampleRate / 48.f, 9u);
+    float dial = 5.f - m.Position(0); // 5 Hz: subsonic
+    std::vector<float> y;
+    for (int b = 0; b < (int)(4.f * kSampleRate / 48); b++) {
+        m.Update(0.35f, 1.f, dial);
+        for (int k = 0; k < 48; k++) y.push_back(m.Process());
+    }
+    CHECK(fabs(Mean(y)) < 1e-3 && LowPassRms(y, 20.f) < 1e-3f, "morse at 5 Hz from zero beat: mean %g, below 20 Hz %g",
+          Mean(y), LowPassRms(y, 20.f));
+}
+
+// A radio pad toggled on and off (every 50 ms, over a 200 Hz sine) doesn't click: as in
+// NoClickWorstRatio, the largest step in the 35 ms after each toggle against the steady 15 ms
+// before and after it. Returns the worst ratio.
+static float RadioNoClickWorstRatio(bitch::Effect pad) {
+    bitch::Engine e;
+    e.Init(kSampleRate);
+    bitch::Params p;
+    p.tune_hz = 50.f;
+    p.effect_amount = 1.f;
+    std::vector<float> l, r;
+    int n = 0;
+    const int kToggles = 40;
+    const size_t segment = (size_t)(0.05f * kSampleRate), fade = (size_t)(0.035f * kSampleRate);
+    for (int i = 0; i < kToggles; i++) {
+        p.effects ^= bitch::Bit(pad);
+        RunFor(e, p, 0.05f, [](int k) { return Sine(200.f, 0.3f, k); }, n, l, r);
+    }
+    auto max_step = [&](size_t from, size_t to) {
+        float step = 0.f;
+        for (size_t k = std::max<size_t>(from, 1); k < std::min(to, l.size()); k++)
+            step = std::max(step, fabsf(l[k] - l[k - 1]));
+        return step;
+    };
+    float worst = 0.f;
+    for (int i = 1; i < kToggles; i++) {
+        size_t at = i * segment;
+        float during = max_step(at, at + fade);
+        float steady = std::max(max_step(at - (segment - fade), at), max_step(at + fade, at + segment));
+        if (steady > 0.f) worst = std::max(worst, during / steady);
+    }
+    return worst;
+}
+
+static void TestEffectsRadioNoClick() {
+    const bitch::Effect kPads[5] = {bitch::kScrambler, bitch::kCarriers, bitch::kMorseChimes, bitch::kSelcall,
+                                    bitch::kJammer};
+    for (bitch::Effect pad : kPads) {
+        float worst = RadioNoClickWorstRatio(pad);
+        printf("  %s on/off: worst step %.2fx the steady ones\n", bitch::EffectName(pad), worst);
+        CHECK(worst < 2.5f, "%s on/off: a step %.2fx the steady ones around it", bitch::EffectName(pad), worst);
+    }
 }
 
 // Each radio pad makes sound from silence while held, and none without it
@@ -2340,12 +2455,13 @@ static void TestEffectCarriersFollowDial() {
     n = 0;
     RunFor(b, p, 1.f, [](int) { return 0.f; }, n, bl, br);
     auto wa = Window(al, 0.5f, 0.52f), wb = Window(bl, 0.5f, 0.52f); // 20 ms: the stations drift
-    // Station positions are the engine's (seed 3, as in TestCarriers): the same stations, heard 300 Hz apart
+    // Station positions are the engine's (seed 3, as in TestCarriers): the same stations, heard 300 Hz higher
+    // (TUNE moves them the same way as the voice)
     bitch::Carriers c;
     c.Init(kSampleRate, kSampleRate / 48.f, 3u);
     float s0 = c.Position(0);
     CHECK(Magnitude(wa, fabsf(s0)) > 5 * Magnitude(wb, fabsf(s0)) &&
-              Magnitude(wb, fabsf(s0 - 300.f)) > 5 * Magnitude(wa, fabsf(s0 - 300.f)),
+              Magnitude(wb, fabsf(s0 + 300.f)) > 5 * Magnitude(wa, fabsf(s0 + 300.f)),
           "carriers don't follow the dial (station %.0f Hz)", s0);
 }
 
@@ -2439,6 +2555,8 @@ int main() {
     TestEffectsRadioSounds();
     TestEffectSelcallMistuned();
     TestEffectCarriersFollowDial();
+    TestRadioZeroBeat();
+    TestEffectsRadioNoClick();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }

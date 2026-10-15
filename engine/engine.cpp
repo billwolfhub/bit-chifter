@@ -108,6 +108,11 @@ void Engine::Reset() {
     spin_hz_ = 0.f;
     for (Scrambler &s : scrambler_) s.Reset();
     scrambler_running_ = false;
+    for (Carriers &c : carriers_) c.Reset();
+    for (MorseChimes &m : morse_) m.Reset();
+    selcall_.Stop();
+    jammer_.Reset();
+    scramble_level_ = selcall_level_ = 0.f;
 }
 
 void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *out_r, size_t size,
@@ -132,6 +137,8 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
         for (int k = 0; k < kEffectCount; k++) level_[k] = (params.effects >> k) & 1u ? 1.f : 0.f;
         burst_level_ = level_[kFeedbackBurst];
         squelch_level_ = level_[kSquelch];
+        scramble_level_ = fmaxf(level_[kScrambler], level_[kHoppingScrambler]);
+        selcall_level_ = level_[kSelcall];
     }
     // Pad effects: each fades in and out over ~30 ms
     const uint32_t fx = params.effects;
@@ -227,28 +234,36 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
     spin_hz_ = Clamp(spin_hz_, -2000.f - limit_turned, 2000.f - limit_turned);
     target_shift_ = SoftQuantize(turned + spin_hz_, detent_pitch_, detent_amount_);
 
-    // Radio pads: the scrambler (either pad), run only while it's audible
+    // Radio pads: the scrambler (either pad), run only while it's audible (its level ramped
+    // across the block). The hops go on through the Hopping pad's release, unless the plain pad
+    // is held
     float amount_radio = Clamp(params.effect_amount, 0.35f, 1.f);
-    float scramble = fmaxf(level_[kScrambler], level_[kHoppingScrambler]);
-    if (scramble > 0.f) {
+    const float scramble_from = scramble_level_, scramble_to = fmaxf(level_[kScrambler], level_[kHoppingScrambler]);
+    scramble_level_ = scramble_to;
+    const bool scrambling = scramble_from > 0.f || scramble_to > 0.f;
+    const bool hopping = level_[kHoppingScrambler] > 0.f && !Has(fx, kScrambler);
+    if (scrambling) {
         if (!scrambler_running_) {
             for (Scrambler &s : scrambler_) s.Reset();
             scrambler_running_ = true;
         }
-        for (Scrambler &s : scrambler_) s.Update(amount_radio, Has(fx, kHoppingScrambler), (float)size / sample_rate_);
+        for (Scrambler &s : scrambler_) s.Update(amount_radio, hopping, (float)size / sample_rate_);
     } else {
         scrambler_running_ = false;
     }
     // The other radio pads, run only while audible: the stations are heard against each side's
-    // dial (the shift as it is now, with the side's stereo gain and drift)
+    // dial (the shift as it is now, with the side's stereo gain and drift). Selcall's level is
+    // ramped across the block here; the others ramp their own gains
     const float level_carriers = level_[kCarriers], level_morse = level_[kMorseChimes];
-    const float level_selcall = level_[kSelcall], level_jammer = level_[kJammer];
+    const float selcall_from = selcall_level_, selcall_to = level_[kSelcall], level_jammer = level_[kJammer];
+    selcall_level_ = selcall_to;
+    const bool calling = selcall_from > 0.f || selcall_to > 0.f;
     for (int c = 0; c < 2; c++) {
-        float dial = shift_hz_ * side_gain_[c] + drift_hz_[c];
-        if (level_carriers > 0.f) carriers_[c].Update(amount_radio, level_carriers, dial);
-        if (level_morse > 0.f) morse_[c].Update(amount_radio, level_morse, dial);
+        float side_dial = shift_hz_ * side_gain_[c] + drift_hz_[c];
+        if (level_carriers > 0.f) carriers_[c].Update(amount_radio, level_carriers, side_dial);
+        if (level_morse > 0.f) morse_[c].Update(amount_radio, level_morse, side_dial);
     }
-    if (level_selcall > 0.f || Has(fx, kSelcall)) {
+    if (calling || Has(fx, kSelcall)) {
         selcall_.Update(Has(fx, kSelcall), amount_radio);
     } else {
         selcall_.Stop();
@@ -332,14 +347,15 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
             }
             squelch_noise = 0.25f * squelch_tail_;
         }
-        float call = level_selcall > 0.f ? level_selcall * selcall_.Process() : 0.f;
+        float call = calling ? (selcall_from + t * (selcall_to - selcall_from)) * selcall_.Process() : 0.f;
         float jam = level_jammer > 0.f ? jammer_.Process() : 0.f;
+        const float scramble = scramble_from + t * (scramble_to - scramble_from);
         float y[2];
         for (int c = 0; c < 2; c++) {
             take_other_[c] += take_glide_ * (take_target[c] - take_other_[c]);
             float dry = signal_gain * (x[c] + take_other_[c] * x[1 - c]) + call;
             float driven = drive_.Process(dry);
-            if (scramble > 0.f) driven += scramble * (scrambler_[c].Process(driven) - driven);
+            if (scrambling) driven += scramble * (scrambler_[c].Process(driven) - driven);
             float ringed = ring_[c].Process(driven, carrier_hz_, ring_amount_);
             float shifted = shifter_[c].Process(ringed, shift[c] + drift_hz_[c], fb);
             float received = fading_[c].Process(shifted) + static_[c].Process();
