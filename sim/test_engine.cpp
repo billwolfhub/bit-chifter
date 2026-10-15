@@ -25,6 +25,7 @@
 #include "scrambler.h"
 #include "carriers.h"
 #include "morse_chimes.h"
+#include "selcall.h"
 #include <algorithm>
 #include <cstdint>
 
@@ -2195,6 +2196,65 @@ static void TestMorseChimes() {
     CHECK(Peak(x) < 0.2f, "morse: peak %.3f", Peak(x));
 }
 
+static std::vector<float> RunSelcall(bitch::Selcall &s, bool on, float amount, float seconds,
+                                     std::vector<float> *tones = nullptr) {
+    std::vector<float> out;
+    for (int b = 0; b < (int)(seconds * kSampleRate / 48); b++) {
+        s.Update(on, amount);
+        for (int k = 0; k < 48; k++) out.push_back(s.Process());
+        if (tones) tones->push_back(s.ToneHz());
+    }
+    return out;
+}
+
+// Burst starts: a sound after at least 40 ms of silence
+static int CountBursts(const std::vector<float> &x) {
+    int bursts = 0, quiet = 100000;
+    for (float v : x) {
+        if (fabsf(v) > 1e-3f) {
+            if (quiet > (int)(0.04f * kSampleRate)) bursts++;
+            quiet = 0;
+        } else {
+            quiet++;
+        }
+    }
+    return bursts;
+}
+
+static void TestSelcall() {
+    const float kZvei[11] = {2400, 1060, 1160, 1270, 1400, 1530, 1670, 1830, 2000, 2200, 2600};
+    const float kCcir[11] = {1981, 1124, 1197, 1275, 1358, 1446, 1540, 1640, 1747, 1860, 2400};
+    bitch::Selcall s;
+    s.Init(kSampleRate, 4u);
+    // The first burst fires at the touch, with tones from one of the two sets
+    std::vector<float> tones;
+    auto x = RunSelcall(s, true, 1.f, 0.05f, &tones);
+    CHECK(Rms(Window(x, 0.01f, 0.05f)) > 0.05f, "selcall: no burst at the touch (%g)", Rms(Window(x, 0.01f, 0.05f)));
+    bool known = false;
+    for (int k = 0; k < 11; k++) known = known || tones.back() == kZvei[k] || tones.back() == kCcir[k];
+    CHECK(known, "selcall: tone %.0f Hz isn't ZVEI or CCIR", tones.back());
+    CHECK(Magnitude(Window(x, 0.01f, 0.05f), tones.back()) > 0.05, "selcall: not at its tone");
+    // Five tones per burst, and bursts every 0.4 s at amount 1 (later ones wait for the last)
+    s.Init(kSampleRate, 4u);
+    tones.clear();
+    x = RunSelcall(s, true, 1.f, 2.f, &tones);
+    CHECK(CountBursts(x) >= 3, "selcall at amount 1: %d bursts in 2 s", CountBursts(x));
+    s.Init(kSampleRate, 4u);
+    x = RunSelcall(s, true, 0.35f, 3.f);
+    CHECK(CountBursts(x) == 2, "selcall at amount 0.35: %d bursts in 3 s (want 2)", CountBursts(x));
+    CHECK(Peak(x) < 0.25f, "selcall: peak %.3f", Peak(x));
+    // Released: no new bursts; Stop() drops a burst that was cut off
+    s.Init(kSampleRate, 4u);
+    RunSelcall(s, true, 1.f, 0.01f);
+    x = RunSelcall(s, false, 1.f, 2.f);
+    CHECK(CountBursts(x) <= 1 && Rms(Window(x, 1.f, 2.f)) == 0.f, "selcall released: still bursting");
+    s.Init(kSampleRate, 4u);
+    RunSelcall(s, true, 1.f, 0.01f);
+    s.Stop();
+    x = RunSelcall(s, false, 1.f, 0.2f);
+    CHECK(Peak(x) == 0.f, "selcall: Stop() didn't drop the burst (%g)", Peak(x));
+}
+
 int main() {
     TestSoftQuantize();
     TestSoftClip();
@@ -2280,6 +2340,7 @@ int main() {
     TestEffectScrambler();
     TestCarriers();
     TestMorseChimes();
+    TestSelcall();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }
