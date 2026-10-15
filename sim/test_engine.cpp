@@ -23,6 +23,7 @@
 #include "../ui/pad_pages.h"
 #include "effects.h"
 #include "scrambler.h"
+#include "carriers.h"
 #include <algorithm>
 #include <cstdint>
 
@@ -2128,6 +2129,44 @@ static void TestEffectScrambler() {
           Rms(hop), Magnitude(hop, 500.f));
 }
 
+static std::vector<float> RunCarriers(bitch::Carriers &c, float amount, float dial_hz, float seconds) {
+    std::vector<float> out;
+    for (int b = 0; b < (int)(seconds * kSampleRate / 48); b++) {
+        c.Update(amount, 1.f, dial_hz);
+        for (int k = 0; k < 48; k++) out.push_back(c.Process());
+    }
+    return out;
+}
+
+static void TestCarriers() {
+    // Rotor: a steady sine at the set frequency
+    bitch::Rotor rotor;
+    rotor.SetHz(440.f, kSampleRate);
+    std::vector<float> x;
+    for (int n = 0; n < 24000; n++) x.push_back(rotor.Next());
+    CHECK(Magnitude(x, 440.f) > 0.45 && fabsf(Peak(x) - 1.f) < 0.01f, "rotor: 440 Hz %.3f, peak %.3f",
+          Magnitude(x, 440.f), Peak(x));
+    bitch::Carriers c;
+    c.Init(kSampleRate, kSampleRate / 48.f, 3u);
+    CHECK(c.Count(0.35f) == 2 && c.Count(1.f) == 6, "carriers: %d and %d stations", c.Count(0.35f), c.Count(1.f));
+    for (int k = 0; k < 6; k++)
+        CHECK(fabsf(c.Position(k)) <= 2500.f && fabsf(c.Position(k)) >= 150.f, "station %d at %.0f Hz", k,
+              c.Position(k));
+    // Heard at its offset from the dial (20 ms windows: the stations drift by up to 20 Hz)
+    float s0 = c.Position(0);
+    auto w = Window(RunCarriers(c, 0.35f, 0.f, 1.f), 0.5f, 0.52f);
+    CHECK(Magnitude(w, fabsf(s0)) > 0.005, "carriers, dial 0: station 0 (%.0f Hz) only %.5f", s0,
+          Magnitude(w, fabsf(s0)));
+    float dial = s0 > 0.f ? s0 - 300.f : s0 + 300.f; // 300 Hz from the station
+    w = Window(RunCarriers(c, 0.35f, dial, 1.f), 0.5f, 0.52f);
+    CHECK(Magnitude(w, 300.f) > 5 * Magnitude(w, fabsf(s0)), "carriers, dial %.0f: 300 Hz %.5f vs %.0f Hz %.5f",
+          dial, Magnitude(w, 300.f), fabsf(s0), Magnitude(w, fabsf(s0)));
+    // Louder at amount 1 (more stations, -12 dBFS each instead of -30)
+    float quiet = Rms(Window(RunCarriers(c, 0.35f, 0.f, 1.f), 0.5f, 1.f));
+    float loud = Rms(Window(RunCarriers(c, 1.f, 0.f, 1.f), 0.5f, 1.f));
+    CHECK(loud > 8 * quiet, "carriers: amount 1 %.4f vs 0.35 %.4f", loud, quiet);
+}
+
 int main() {
     TestSoftQuantize();
     TestSoftClip();
@@ -2211,6 +2250,7 @@ int main() {
     TestEffectsStable();
     TestScrambler();
     TestEffectScrambler();
+    TestCarriers();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }
