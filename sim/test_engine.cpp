@@ -24,6 +24,7 @@
 #include "effects.h"
 #include "scrambler.h"
 #include "carriers.h"
+#include "morse_chimes.h"
 #include <algorithm>
 #include <cstdint>
 
@@ -2167,6 +2168,33 @@ static void TestCarriers() {
     CHECK(loud > 8 * quiet, "carriers: amount 1 %.4f vs 0.35 %.4f", loud, quiet);
 }
 
+static void TestMorseChimes() {
+    bitch::MorseChimes m;
+    m.Init(kSampleRate, kSampleRate / 48.f, 9u);
+    CHECK(m.Keyers(0.35f) == 1 && m.Keyers(1.f) == 3, "morse: %d and %d keyers", m.Keyers(0.35f), m.Keyers(1.f));
+    std::vector<float> x;
+    for (int b = 0; b < (int)(4.f * kSampleRate / 48); b++) {
+        m.Update(0.35f, 1.f, 0.f);
+        for (int k = 0; k < 48; k++) x.push_back(m.Process());
+    }
+    // Keyed: tones and gaps (10 ms windows)
+    int on = 0, off = 0, edges = 0;
+    bool was_on = false;
+    for (float t = 0.f; t + 0.01f <= 4.f; t += 0.01f) {
+        bool now_on = Rms(Window(x, t, t + 0.01f)) > 0.01f;
+        on += now_on;
+        off += Rms(Window(x, t, t + 0.01f)) < 0.002f;
+        edges += now_on != was_on;
+        was_on = now_on;
+    }
+    CHECK(on > 40 && off > 40 && edges >= 16, "morse: %d windows on, %d off, %d edges in 4 s", on, off, edges);
+    // At the keyer's offset from the dial
+    float hz = fabsf(m.Position(0));
+    CHECK(Magnitude(x, hz) > 5 * Magnitude(x, hz * 1.5f), "morse: %.0f Hz %.5f vs %.0f Hz %.5f", hz,
+          Magnitude(x, hz), hz * 1.5f, Magnitude(x, hz * 1.5f));
+    CHECK(Peak(x) < 0.2f, "morse: peak %.3f", Peak(x));
+}
+
 int main() {
     TestSoftQuantize();
     TestSoftClip();
@@ -2251,6 +2279,7 @@ int main() {
     TestScrambler();
     TestEffectScrambler();
     TestCarriers();
+    TestMorseChimes();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }
