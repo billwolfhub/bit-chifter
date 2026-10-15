@@ -38,7 +38,7 @@ least-needed one goes on the top centre.
 | 4 (big, left) | Echoes | Scrambler | Bitcrush |
 | 6 (big, right) | Spiral up | Passing carriers | Stutter |
 | 3 (left edge) | Reverse echoes | Hopping scrambler | Sample-rate crush |
-| 7 (right edge) | Spiral down | Morse chimes | Dropouts |
+| 7 (right edge) | Spiral down | Selcall | Dropouts |
 | 5 (centre strip) | Ping-pong echoes | Jammer | Codec warble |
 | 0 (top left) | Chirp | Static burst | Ring 100% |
 | 2 (top right) | Warble | Squelch | Carrier ×2 |
@@ -94,9 +94,13 @@ when off, and fades in and out over 10–30 ms so switching never clicks.
   the dial, so moving TUNE sweeps them through high, zero and back (heterodyne whistles).
   Level −30 to −12 dBFS with a; they drift slowly. Mixed in after the shifter, before the
   radio filter.
-- **Morse chimes:** 1–3 carriers keyed in random Morse-like dits and dahs (12–25 words per
-  minute), each key-down a tone with a soft attack and a bell-like decay, so they chime.
-  Their pitch follows the dial like the passing carriers.
+- **Selcall** (replaced Morse chimes on 2026-10-15: reference renders showed the user's
+  remembered "scale-like chimes" were close to selcall): while held, random 5-tone selcall
+  bursts (the ZVEI tone set, 70 ms per tone, or CCIR, 100 ms; a repeated digit uses the
+  repeat tone), at about −14 dBFS with 4 ms tone edges, firing every 2 s (a = 0.35) down to
+  every 0.4 s (a = 1), the first one at the touch. They are mixed into the input **before the
+  shifter**, so TUNE mistunes them like a real receiver (and the detents can snap them back
+  in tune), and the radio filter, reception and damage shape them like any station.
 - **Jammer:** a sawtooth-swept tone (sweeping 300 Hz – 3 kHz at 0.5–4 Hz) plus noise
   bursts, over the signal; level rises with a.
 - **Static burst:** static to its maximum level.
@@ -155,11 +159,11 @@ At the input, before Drive, so the whole chain (dry included) processes the capt
   tested on the Mac. `simple_touch.cpp` only reads the hardware and calls it.
 - **Signal chain (changes in bold):**
   1. **Capture**
-  2. Drive → **Scrambler** → Ring mod
+  2. **+ Selcall bursts** → Drive → **Scrambler** → Ring mod
   3. Shifter: shift = dial + tuning hand + **chirp + warble + spin + spiral**, then
      detents, stereo gains and drift; **the feedback delay grows into the echoes**;
      **a second shifter per side for the spiral**
-  4. Fading + static + **passing carriers + Morse chimes + jammer**
+  4. Fading + static + **passing carriers + jammer** (Selcall goes in before the shifter, at 2)
   5. Radio filter → **Digital damage** → AGC
   6. Dry/wet mix, swap, soft clip, NaN guard (as now)
 - **Memory:** the echo buffers (~1 s per side) and the capture buffer (2 s stereo) live in
@@ -193,7 +197,7 @@ At the input, before Drive, so the whole chain (dry included) processes the capt
    drift, dial spin up/down. Other pads do nothing until their step.
 2. **Time:** Echoes, Reverse and Ping-pong echoes; Freeze and Loop (shared buffer code).
 3. **Motion:** Chirp, Warble, Spiral up/down.
-4. **Radio:** Scrambler, Hopping scrambler, Passing carriers, Morse chimes, Jammer.
+4. **Radio:** Scrambler, Hopping scrambler, Passing carriers, Selcall, Jammer.
 5. **Digital:** Bitcrush, Sample-rate crush, Dropouts, Stutter, Codec warble, Chaos.
 
 ## Out of scope (for now)
