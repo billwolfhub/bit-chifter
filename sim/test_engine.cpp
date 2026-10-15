@@ -1688,6 +1688,7 @@ static float Rms(const std::vector<float> &x) { return x.empty() ? 0.f : sqrtf((
 // The effects built in this step
 static const uint32_t kBuiltEffects =
     bitch::Bit(bitch::kScrambler) | bitch::Bit(bitch::kHoppingScrambler) |
+    bitch::Bit(bitch::kCarriers) | bitch::Bit(bitch::kSelcall) | bitch::Bit(bitch::kMorseChimes) | bitch::Bit(bitch::kJammer) |
     bitch::Bit(bitch::kFeedbackBurst) | bitch::Bit(bitch::kSpinUp) | bitch::Bit(bitch::kSpinDown) |
     bitch::Bit(bitch::kStaticBurst) | bitch::Bit(bitch::kSquelch) | bitch::Bit(bitch::kFadeOut) |
     bitch::Bit(bitch::kFilterSlam) | bitch::Bit(bitch::kRing100) |
@@ -2288,6 +2289,66 @@ static void TestJammer() {
     CHECK(Rms(y) < 0.5f * loud, "jammer at 0.35: rms %.3f vs %.3f", Rms(y), loud);
 }
 
+// Each radio pad makes sound from silence while held, and none without it
+static void TestEffectsRadioSounds() {
+    const bitch::Effect kPads[4] = {bitch::kCarriers, bitch::kSelcall, bitch::kMorseChimes, bitch::kJammer};
+    for (bitch::Effect pad : kPads) {
+        bitch::Engine e;
+        e.Init(kSampleRate);
+        bitch::Params p;
+        p.effect_amount = 1.f;
+        p.effects = bitch::Bit(pad);
+        std::vector<float> l, r;
+        int n = 0;
+        RunFor(e, p, 2.f, [](int) { return 0.f; }, n, l, r);
+        CHECK(Rms(Window(l, 0.f, 2.f)) > 0.01f, "%s: only %g from silence", bitch::EffectName(pad),
+              Rms(Window(l, 0.f, 2.f)));
+        p.effects = 0u;
+        RunFor(e, p, 1.f, [](int) { return 0.f; }, n, l, r);
+        CHECK(Peak(Window(l, 2.5f, 3.f)) < 1e-4f, "%s: still sounding after release (%g)", bitch::EffectName(pad),
+              Peak(Window(l, 2.5f, 3.f)));
+    }
+}
+
+// Selcall goes in before the shifter, so TUNE mistunes it like a receiver
+static void TestEffectSelcallMistuned() {
+    bitch::Engine e;
+    e.Init(kSampleRate);
+    bitch::Params p;
+    p.tune_hz = 200.f;
+    p.effects = bitch::Bit(bitch::kSelcall);
+    std::vector<float> l, r;
+    int n = 0;
+    RunFor(e, p, 0.06f, [](int) { return 0.f; }, n, l, r);
+    float tone = e.SelcallToneHz();
+    auto w = Window(l, 0.02f, 0.06f);
+    CHECK(Magnitude(w, tone + 200.f) > 5 * Magnitude(w, tone), "selcall + tune 200: %.0f Hz %.4f vs %.0f Hz %.4f",
+          tone + 200.f, Magnitude(w, tone + 200.f), tone, Magnitude(w, tone));
+}
+
+// The carriers move with TUNE: the whistles change pitch as the dial moves
+static void TestEffectCarriersFollowDial() {
+    bitch::Engine a, b;
+    a.Init(kSampleRate);
+    b.Init(kSampleRate);
+    bitch::Params p;
+    p.effects = bitch::Bit(bitch::kCarriers);
+    std::vector<float> al, ar, bl, br;
+    int n = 0;
+    RunFor(a, p, 1.f, [](int) { return 0.f; }, n, al, ar);
+    p.tune_hz = 300.f;
+    n = 0;
+    RunFor(b, p, 1.f, [](int) { return 0.f; }, n, bl, br);
+    auto wa = Window(al, 0.5f, 0.52f), wb = Window(bl, 0.5f, 0.52f); // 20 ms: the stations drift
+    // Station positions are the engine's (seed 3, as in TestCarriers): the same stations, heard 300 Hz apart
+    bitch::Carriers c;
+    c.Init(kSampleRate, kSampleRate / 48.f, 3u);
+    float s0 = c.Position(0);
+    CHECK(Magnitude(wa, fabsf(s0)) > 5 * Magnitude(wb, fabsf(s0)) &&
+              Magnitude(wb, fabsf(s0 - 300.f)) > 5 * Magnitude(wa, fabsf(s0 - 300.f)),
+          "carriers don't follow the dial (station %.0f Hz)", s0);
+}
+
 int main() {
     TestSoftQuantize();
     TestSoftClip();
@@ -2375,6 +2436,9 @@ int main() {
     TestMorseChimes();
     TestSelcall();
     TestJammer();
+    TestEffectsRadioSounds();
+    TestEffectSelcallMistuned();
+    TestEffectCarriersFollowDial();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }

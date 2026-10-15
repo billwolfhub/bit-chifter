@@ -43,6 +43,12 @@ void Engine::Init(float sample_rate, size_t block_size, PlateReverb *plate) {
         agc_[c].Init(sample_rate);
     }
     for (Scrambler &s : scrambler_) s.Init(sample_rate, 83u); // the same seed: both sides hop together
+    for (int c = 0; c < 2; c++) {
+        carriers_[c].Init(sample_rate, block_rate, 3u); // same seed: the same stations both sides
+        morse_[c].Init(sample_rate, block_rate, 9u);
+    }
+    selcall_.Init(sample_rate, 71u);
+    jammer_.Init(sample_rate, 6u);
     hand_.Init(block_rate, 47u);
     pitch_.Init(sample_rate);
     squelch_attack_ = 1.f / (0.002f * sample_rate);
@@ -233,6 +239,21 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
     } else {
         scrambler_running_ = false;
     }
+    // The other radio pads, run only while audible: the stations are heard against each side's
+    // dial (the shift as it is now, with the side's stereo gain and drift)
+    const float level_carriers = level_[kCarriers], level_morse = level_[kMorseChimes];
+    const float level_selcall = level_[kSelcall], level_jammer = level_[kJammer];
+    for (int c = 0; c < 2; c++) {
+        float dial = shift_hz_ * side_gain_[c] + drift_hz_[c];
+        if (level_carriers > 0.f) carriers_[c].Update(amount_radio, level_carriers, dial);
+        if (level_morse > 0.f) morse_[c].Update(amount_radio, level_morse, dial);
+    }
+    if (level_selcall > 0.f || Has(fx, kSelcall)) {
+        selcall_.Update(Has(fx, kSelcall), amount_radio);
+    } else {
+        selcall_.Stop();
+    }
+    if (level_jammer > 0.f) jammer_.Update(amount_radio, level_jammer, (float)size / sample_rate_);
 
     // The plate: idle (and skipped) at 0 or without a plate. While idle it is cleared in steps
     // (1024 floats a block, ~40 ms for all of it), and it starts again only once clean, so an
@@ -311,15 +332,20 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
             }
             squelch_noise = 0.25f * squelch_tail_;
         }
+        float call = level_selcall > 0.f ? level_selcall * selcall_.Process() : 0.f;
+        float jam = level_jammer > 0.f ? jammer_.Process() : 0.f;
         float y[2];
         for (int c = 0; c < 2; c++) {
             take_other_[c] += take_glide_ * (take_target[c] - take_other_[c]);
-            float dry = signal_gain * (x[c] + take_other_[c] * x[1 - c]);
+            float dry = signal_gain * (x[c] + take_other_[c] * x[1 - c]) + call;
             float driven = drive_.Process(dry);
             if (scramble > 0.f) driven += scramble * (scrambler_[c].Process(driven) - driven);
             float ringed = ring_[c].Process(driven, carrier_hz_, ring_amount_);
             float shifted = shifter_[c].Process(ringed, shift[c] + drift_hz_[c], fb);
             float received = fading_[c].Process(shifted) + static_[c].Process();
+            if (level_carriers > 0.f) received += carriers_[c].Process();
+            if (level_morse > 0.f) received += morse_[c].Process();
+            received += jam;
             if (squelch_noise > 0.f) received += squelch_noise * squelch_noise_.Bipolar();
             float wet = wet_gain * agc_[c].Process(filter_[c].Process(received));
             y[c] = dry + mix_ * (wet - dry);

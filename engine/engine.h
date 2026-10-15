@@ -15,6 +15,10 @@
 #include "plate_reverb.h"
 #include "effects.h"
 #include "scrambler.h"
+#include "carriers.h"
+#include "morse_chimes.h"
+#include "selcall.h"
+#include "jammer.h"
 
 namespace bitch {
 
@@ -59,6 +63,7 @@ class Engine {
     void Init(float sample_rate, size_t block_size = 48, PlateReverb *plate = nullptr);
     // Test hook: a side's shifter oscillator phase (0-1)
     float ShifterPhase(int side) const { return shifter_[side].Phase(); }
+    float SelcallToneHz() const { return selcall_.ToneHz(); }
     // The source's tracked fundamental, Hz (the last one found: kept when the confidence drops to 0)
     float Pitch() const { return pitch_.Pitch(); }
     float PitchConfidence() const { return pitch_.Confidence(); } // 0-1
@@ -129,6 +134,10 @@ class Engine {
     // Radio pads
     Scrambler scrambler_[2];
     bool scrambler_running_ = false; // reset when it starts, so no stale state fades in
+    Carriers carriers_[2];   // the same stations both sides, heard against each side's dial
+    MorseChimes morse_[2];
+    Selcall selcall_;        // mono, into both inputs
+    Jammer jammer_;          // mono, into both sides' receivers
 };
 
 } // namespace bitch
