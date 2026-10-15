@@ -42,6 +42,7 @@ void Engine::Init(float sample_rate, size_t block_size, PlateReverb *plate) {
         static_[c].Init(sample_rate, kSeeds[c] * 7u + 5u);
         agc_[c].Init(sample_rate);
     }
+    for (Scrambler &s : scrambler_) s.Init(sample_rate, 83u); // the same seed: both sides hop together
     hand_.Init(block_rate, 47u);
     pitch_.Init(sample_rate);
     squelch_attack_ = 1.f / (0.002f * sample_rate);
@@ -99,6 +100,8 @@ void Engine::Reset() {
     squelch_was_on_ = false;
     burst_level_ = squelch_level_ = 0.f;
     spin_hz_ = 0.f;
+    for (Scrambler &s : scrambler_) s.Reset();
+    scrambler_running_ = false;
 }
 
 void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *out_r, size_t size,
@@ -218,6 +221,19 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
     spin_hz_ = Clamp(spin_hz_, -2000.f - limit_turned, 2000.f - limit_turned);
     target_shift_ = SoftQuantize(turned + spin_hz_, detent_pitch_, detent_amount_);
 
+    // Radio pads: the scrambler (either pad), run only while it's audible
+    float amount_radio = Clamp(params.effect_amount, 0.35f, 1.f);
+    float scramble = fmaxf(level_[kScrambler], level_[kHoppingScrambler]);
+    if (scramble > 0.f) {
+        if (!scrambler_running_) {
+            for (Scrambler &s : scrambler_) s.Reset();
+            scrambler_running_ = true;
+        }
+        for (Scrambler &s : scrambler_) s.Update(amount_radio, Has(fx, kHoppingScrambler), (float)size / sample_rate_);
+    } else {
+        scrambler_running_ = false;
+    }
+
     // The plate: idle (and skipped) at 0 or without a plate. While idle it is cleared in steps
     // (1024 floats a block, ~40 ms for all of it), and it starts again only once clean, so an
     // old tail never replays (until then reverb_ stays at 0, and the glide starts from there)
@@ -300,6 +316,7 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
             take_other_[c] += take_glide_ * (take_target[c] - take_other_[c]);
             float dry = signal_gain * (x[c] + take_other_[c] * x[1 - c]);
             float driven = drive_.Process(dry);
+            if (scramble > 0.f) driven += scramble * (scrambler_[c].Process(driven) - driven);
             float ringed = ring_[c].Process(driven, carrier_hz_, ring_amount_);
             float shifted = shifter_[c].Process(ringed, shift[c] + drift_hz_[c], fb);
             float received = fading_[c].Process(shifted) + static_[c].Process();

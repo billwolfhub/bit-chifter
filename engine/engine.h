@@ -14,6 +14,7 @@
 #include "pitch_tracker.h"
 #include "plate_reverb.h"
 #include "effects.h"
+#include "scrambler.h"
 
 namespace bitch {
 
@@ -125,6 +126,9 @@ class Engine {
     Random squelch_noise_;
     float spin_hz_ = 0.f;     // Dial spin: the dial's extra turn
     float spin_return_ = 0.f; // per block, 0.3 s time constant (the dial back in ~1 s after a spin)
+    // Radio pads
+    Scrambler scrambler_[2];
+    bool scrambler_running_ = false; // reset when it starts, so no stale state fades in
 };
 
 } // namespace bitch

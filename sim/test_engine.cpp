@@ -1683,6 +1683,7 @@ static float Rms(const std::vector<float> &x) { return x.empty() ? 0.f : sqrtf((
 
 // The effects built in this step
 static const uint32_t kBuiltEffects =
+    bitch::Bit(bitch::kScrambler) | bitch::Bit(bitch::kHoppingScrambler) |
     bitch::Bit(bitch::kFeedbackBurst) | bitch::Bit(bitch::kSpinUp) | bitch::Bit(bitch::kSpinDown) |
     bitch::Bit(bitch::kStaticBurst) | bitch::Bit(bitch::kSquelch) | bitch::Bit(bitch::kFadeOut) |
     bitch::Bit(bitch::kFilterSlam) | bitch::Bit(bitch::kRing100) |
@@ -2097,6 +2098,36 @@ static void TestScrambler() {
           (int)in_range);
 }
 
+static void TestEffectScrambler() {
+    for (int on = 0; on < 2; on++) {
+        bitch::Engine e;
+        e.Init(kSampleRate);
+        bitch::Params p;
+        p.effects = on ? bitch::Bit(bitch::kScrambler) : 0u;
+        std::vector<float> l, r;
+        int n = 0;
+        RunFor(e, p, 1.f, [](int k) { return Sine(1000.f, 0.25f, k); }, n, l, r);
+        auto w = Window(l, 0.5f, 1.f);
+        if (on)
+            CHECK(Magnitude(w, 2400.f) > 10 * Magnitude(w, 1000.f), "scrambler pad: 2400 Hz %.4f vs 1000 Hz %.4f",
+                  Magnitude(w, 2400.f), Magnitude(w, 1000.f));
+        else
+            CHECK(Magnitude(w, 1000.f) > 10 * Magnitude(w, 2400.f), "no scrambler: not the plain tone");
+    }
+    // The Hopping pad on its own turns the scrambler on too (the hops are tested in TestScrambler)
+    bitch::Engine e;
+    e.Init(kSampleRate);
+    bitch::Params p;
+    p.effects = bitch::Bit(bitch::kHoppingScrambler);
+    p.effect_amount = 1.f;
+    std::vector<float> l, r;
+    int n = 0;
+    RunFor(e, p, 2.f, [](int k) { return Sine(500.f, 0.25f, k); }, n, l, r);
+    auto hop = Window(l, 1.f, 2.f);
+    CHECK(Rms(hop) > 0.05f && Magnitude(hop, 500.f) < 0.2 * Rms(hop), "hopping scrambler pad: rms %.4f, 500 Hz %.4f",
+          Rms(hop), Magnitude(hop, 500.f));
+}
+
 int main() {
     TestSoftQuantize();
     TestSoftClip();
@@ -2179,6 +2210,7 @@ int main() {
     TestEffectDriftLinked();
     TestEffectsStable();
     TestScrambler();
+    TestEffectScrambler();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }
