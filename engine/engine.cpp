@@ -151,14 +151,13 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
     reception_ += block_glide_ * (Clamp(params.reception, 0.f, 1.f) - reception_);
     float r = reception_ < 1e-4f ? 0.f : reception_;
     drive_.Set(r);
-    // Drift to maximum raises the drift alone; Static burst the static alone; Hold drift
-    // freezes the drift and the tuning hand where they are
-    float drift_amount = r + level_[kDriftMax] * (1.f - r);
+    // Static burst raises the static alone; Hold drift freezes the drift and the tuning hand
+    // where they are
     float static_level = r + level_[kStaticBurst] * (1.f - r);
     const bool hold = Has(fx, kHoldDrift);
     for (int c = 0; c < 2; c++) {
         if (!hold)
-            drift_hz_[c] = drift_amount > 0.f ? drift_amount * 40.f * drift_[c].Next(0.1f + 0.4f * drift_amount) : 0.f;
+            drift_hz_[c] = r > 0.f ? r * 40.f * drift_[c].Next(0.1f + 0.4f * r) : 0.f;
         fading_[c].Update(r);
         static_[c].Update(static_level);
         agc_[c].Update(r);
@@ -251,10 +250,10 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
     } else {
         // Linked: keep the two oscillators in phase (they are left at an offset after Mirror/Rotate).
         // Pulling the right one gently (<1 Hz deviation) converges in ~100 ms and is inaudible.
-        // The lock fades out as the drift rises (reception, or Drift to maximum: gone above 0.05)
-        // so the sides can drift apart; it re-locks within ~100 ms once the drift is back at 0.
-        // Off while Hold drift keeps a drift.
-        float lock = 0.02f * fmaxf(1.f - drift_amount * 20.f, 0.f);
+        // The lock fades out as the drift rises with reception (gone above 0.05) so the sides can
+        // drift apart; it re-locks within ~100 ms once the drift is back at 0. Off while Hold drift
+        // keeps a drift (even with reception turned down).
+        float lock = 0.02f * fmaxf(1.f - r * 20.f, 0.f);
         if (hold && (drift_hz_[0] != 0.f || drift_hz_[1] != 0.f)) lock = 0.f;
         if (lock > 0.f) {
             float err = shifter_[0].Phase() - shifter_[1].Phase();

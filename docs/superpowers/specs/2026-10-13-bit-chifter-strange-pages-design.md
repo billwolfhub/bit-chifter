@@ -44,7 +44,7 @@ least-needed one goes on the top centre.
 | 2 (top right) | Warble | Squelch | Carrier ×2 |
 | 8 (bottom left) | Dial spin down | Signal fade-out | Kill dry |
 | 9 (bottom right) | Dial spin up | Filter slam | Chaos |
-| 1 (top centre) | Feedback burst | Drift to maximum | Hold drift |
+| 1 (top centre) | Feedback burst | Morse chimes | Hold drift |
 
 ## The effects
 
@@ -94,7 +94,7 @@ when off, and fades in and out over 10–30 ms so switching never clicks.
   the dial, so moving TUNE sweeps them through high, zero and back (heterodyne whistles).
   Level −30 to −12 dBFS with a; they drift slowly. Mixed in after the shifter, before the
   radio filter.
-- **Selcall** (replaced Morse chimes on 2026-10-15: reference renders showed the user's
+- **Selcall** (added 2026-10-15, taking Morse chimes' first pad; reference renders showed the user's
   remembered "scale-like chimes" were close to selcall): while held, random 5-tone selcall
   bursts (the ZVEI tone set, 70 ms per tone, or CCIR, 100 ms; a repeated digit uses the
   repeat tone), at about −14 dBFS with 4 ms tone edges, firing every 2 s (a = 0.35) down to
@@ -107,7 +107,10 @@ when off, and fades in and out over 10–30 ms so switching never clicks.
 - **Squelch:** the wet signal mutes; on release it opens with a short squelch-tail noise
   burst.
 - **Signal fade-out:** the signal fades to −40 dB over 1.5 s while on, and back after.
-- **Drift to maximum:** the drift goes to its maximum, whatever RECEPTION is.
+- **Morse chimes** (replaced Drift to maximum on 2026-10-15, which RECEPTION at the top
+  already gave): 1–3 carriers keyed in random Morse-like dits and dahs (12–25 words per
+  minute), each key-down a tone with a soft attack and a bell-like decay, so they chime.
+  Their pitch follows the dial like the passing carriers.
 - **Filter slam:** the radio filter jumps to its narrowest and most resonant.
 
 ### Page 3: Digital & damage
@@ -163,7 +166,8 @@ At the input, before Drive, so the whole chain (dry included) processes the capt
   3. Shifter: shift = dial + tuning hand + **chirp + warble + spin + spiral**, then
      detents, stereo gains and drift; **the feedback delay grows into the echoes**;
      **a second shifter per side for the spiral**
-  4. Fading + static + **passing carriers + jammer** (Selcall goes in before the shifter, at 2)
+  4. Fading + static + **passing carriers + Morse chimes + jammer** (Selcall goes in before the
+     shifter, at 2)
   5. Radio filter → **Digital damage** → AGC
   6. Dry/wet mix, swap, soft clip, NaN guard (as now)
 - **Memory:** the echo buffers (~1 s per side) and the capture buffer (2 s stereo) live in
@@ -193,11 +197,11 @@ At the input, before Drive, so the whole chain (dry included) processes the capt
 
 1. **Pages:** the page switch, pad logic (momentary pads, TOU tap), the effects
    bits in the engine, and the cheap effects: feedback burst, static burst, signal
-   fade-out, drift to maximum, filter slam, squelch, ring 100%, carrier ×2, kill dry, hold
+   fade-out, filter slam, squelch, ring 100%, carrier ×2, kill dry, hold
    drift, dial spin up/down. Other pads do nothing until their step.
 2. **Time:** Echoes, Reverse and Ping-pong echoes; Freeze and Loop (shared buffer code).
 3. **Motion:** Chirp, Warble, Spiral up/down.
-4. **Radio:** Scrambler, Hopping scrambler, Passing carriers, Selcall, Jammer.
+4. **Radio:** Scrambler, Hopping scrambler, Passing carriers, Selcall, Morse chimes, Jammer.
 5. **Digital:** Bitcrush, Sample-rate crush, Dropouts, Stutter, Codec warble, Chaos.
 
 ## Out of scope (for now)

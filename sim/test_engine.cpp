@@ -1588,7 +1588,7 @@ static void TestEffectsMapping() {
     CHECK(PadEffect(0, 1) == kFeedbackBurst, "page 1 top centre: %d", PadEffect(0, 1));
     CHECK(PadEffect(0, 8) == kSpinDown && PadEffect(0, 9) == kSpinUp, "page 1 bottom pads");
     CHECK(PadEffect(1, 0) == kStaticBurst && PadEffect(1, 2) == kSquelch, "page 2 top pads");
-    CHECK(PadEffect(1, 8) == kFadeOut && PadEffect(1, 9) == kFilterSlam && PadEffect(1, 1) == kDriftMax,
+    CHECK(PadEffect(1, 8) == kFadeOut && PadEffect(1, 9) == kFilterSlam && PadEffect(1, 1) == kMorseChimes,
           "page 2 bottom and top centre pads");
     CHECK(PadEffect(2, 0) == kRing100 && PadEffect(2, 2) == kCarrierX2 && PadEffect(2, 8) == kKillDry,
           "page 3 pads");
@@ -1684,7 +1684,7 @@ static float Rms(const std::vector<float> &x) { return x.empty() ? 0.f : sqrtf((
 static const uint32_t kBuiltEffects =
     bitch::Bit(bitch::kFeedbackBurst) | bitch::Bit(bitch::kSpinUp) | bitch::Bit(bitch::kSpinDown) |
     bitch::Bit(bitch::kStaticBurst) | bitch::Bit(bitch::kSquelch) | bitch::Bit(bitch::kFadeOut) |
-    bitch::Bit(bitch::kFilterSlam) | bitch::Bit(bitch::kDriftMax) | bitch::Bit(bitch::kRing100) |
+    bitch::Bit(bitch::kFilterSlam) | bitch::Bit(bitch::kRing100) |
     bitch::Bit(bitch::kCarrierX2) | bitch::Bit(bitch::kKillDry) | bitch::Bit(bitch::kHoldDrift);
 
 // Pads whose effects come in later steps change nothing (bit for bit)
@@ -1795,9 +1795,9 @@ static void TestEffectFilterSlam() {
 // noise burst is meant to be abrupt). Static burst isn't toggled: its crackles jump by design.
 // Returns the worst ratio over the toggles.
 static float NoClickWorstRatio(uint32_t seed) {
-    const bitch::Effect kToggled[8] = {bitch::kFadeOut,    bitch::kKillDry,       bitch::kRing100,
-                                       bitch::kCarrierX2,  bitch::kFilterSlam,    bitch::kFeedbackBurst,
-                                       bitch::kDriftMax,   bitch::kSquelch};
+    const bitch::Effect kToggled[7] = {bitch::kFadeOut,   bitch::kKillDry,    bitch::kRing100,
+                                       bitch::kCarrierX2, bitch::kFilterSlam, bitch::kFeedbackBurst,
+                                       bitch::kSquelch};
     bitch::Engine e;
     e.Init(kSampleRate);
     bitch::Params p;
@@ -1866,17 +1866,6 @@ static float Range(const std::vector<float> &x, size_t from) {
         hi = std::max(hi, x[i]);
     }
     return hi - lo;
-}
-
-static void TestEffectDriftMax() {
-    bitch::Params p;
-    bitch::Engine e;
-    e.Init(kSampleRate);
-    auto still = ShiftTrace(e, p, 5.f, [](int) { return 0.f; });
-    CHECK(Range(still, 100) < 0.01f, "reception 0: the shift moved %.3f Hz", Range(still, 100));
-    p.effects = bitch::Bit(bitch::kDriftMax);
-    auto drift = ShiftTrace(e, p, 10.f, [](int) { return 0.f; });
-    CHECK(Range(drift, 1000) > 20.f, "drift to maximum: only %.1f Hz", Range(drift, 1000));
 }
 
 static void TestEffectHoldDrift() {
@@ -1996,43 +1985,28 @@ static void TestEffectSpins() {
           gentle.back());
 }
 
-// Drift to maximum in Linked mode: the phase lock doesn't fight the drift (no jumps in the
-// right side's frequency, and the sides drift apart); nor does it while Hold drift keeps a drift
+// Hold drift in Linked mode: once reception has drifted the sides apart, holding the drift
+// keeps them apart even with reception turned back to 0 (the phase lock stays off)
 static void TestEffectDriftLinked() {
     auto silence = [](int) { return 0.f; };
-    const float kReceptions[2] = {0.f, 0.02f};
-    for (float reception : kReceptions) {
-        bitch::Engine e;
-        e.Init(kSampleRate);
-        bitch::Params p;
-        p.reception = reception;
-        p.effects = bitch::Bit(bitch::kDriftMax);
-        std::vector<float> left, right;
-        ShiftTraces(e, p, 10.f, silence, left, right);
-        float jump = 0.f, apart = 0.f;
-        for (size_t k = 1; k < right.size(); k++) jump = std::max(jump, fabsf(right[k] - right[k - 1]));
-        for (size_t k = 0; k < right.size(); k++) apart = std::max(apart, fabsf(right[k] - left[k]));
-        CHECK(jump < 1.f, "drift to maximum, reception %.2f: the right side jumps %.2f Hz between blocks", reception,
-              jump);
-        CHECK(apart > 3.f, "drift to maximum, reception %.2f: the sides only %.2f Hz apart", reception, apart);
-    }
-    // Hold drift once the sides have drifted apart: they stay as they are
     bitch::Engine e;
     e.Init(kSampleRate);
     bitch::Params p;
-    p.effects = bitch::Bit(bitch::kDriftMax);
+    p.reception = 0.5f;
     std::vector<float> left, right;
     for (int i = 0; i < 100 && (left.empty() || fabsf(right.back() - left.back()) < 3.f); i++)
         ShiftTraces(e, p, 0.1f, silence, left, right);
     float start = right.back() - left.back();
-    CHECK(fabsf(start) >= 3.f, "drift to maximum: the sides never 3 Hz apart (%.2f)", start);
+    CHECK(fabsf(start) >= 3.f, "reception 0.5: the sides never 3 Hz apart (%.2f)", start);
     p.effects = bitch::Bit(bitch::kHoldDrift);
+    p.reception = 0.f;
     left.clear();
     right.clear();
     ShiftTraces(e, p, 3.f, silence, left, right);
     float moved = 0.f;
     for (size_t k = 0; k < right.size(); k++) moved = std::max(moved, fabsf(right[k] - left[k] - start));
-    CHECK(moved < 0.1f, "hold drift, Linked: the sides' difference moved %.3f Hz (from %.2f)", moved, start);
+    CHECK(moved < 0.1f, "hold drift, Linked, reception down: the sides' difference moved %.3f Hz (from %.2f)", moved,
+          start);
 }
 
 // Every effect at once (but Squelch and Fade-out) at the extremes, the spins switching every
@@ -2148,7 +2122,6 @@ int main() {
     TestEffectFilterSlam();
     TestEffectsNoClick();
     TestEffectStaticBurst();
-    TestEffectDriftMax();
     TestEffectHoldDrift();
     TestEffectFadeOut();
     TestEffectSquelch();

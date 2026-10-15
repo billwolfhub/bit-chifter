@@ -13,7 +13,7 @@ enum Effect : int {
     kChirp, kWarble, kSpinDown, kSpinUp, kFeedbackBurst,
     // Page 2: Radio
     kScrambler, kCarriers, kHoppingScrambler, kSelcall, kJammer,
-    kStaticBurst, kSquelch, kFadeOut, kFilterSlam, kDriftMax,
+    kStaticBurst, kSquelch, kFadeOut, kFilterSlam, kMorseChimes,
     // Page 3: Digital & damage
     kBitcrush, kStutter, kRateCrush, kDropouts, kCodecWarble,
     kRing100, kCarrierX2, kKillDry, kChaos, kHoldDrift,
@@ -38,7 +38,7 @@ inline const char *EffectName(int e) {
         "echoes",    "spiral_up", "reverse_echoes",    "spiral_down",  "ping_pong_echoes",
         "chirp",     "warble",    "spin_down",         "spin_up",      "feedback_burst",
         "scrambler", "carriers",  "hopping_scrambler", "selcall",      "jammer",
-        "static_burst", "squelch", "fade_out",         "filter_slam",  "drift_max",
+        "static_burst", "squelch", "fade_out",         "filter_slam",  "morse_chimes",
         "bitcrush",  "stutter",   "rate_crush",        "dropouts",     "codec_warble",
         "ring_100",  "carrier_x2", "kill_dry",         "chaos",        "hold_drift"};
     return e >= 0 && e < kEffectCount ? kNames[e] : "?";
