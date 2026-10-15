@@ -22,6 +22,7 @@
 #include "plate_reverb.h"
 #include "../ui/pad_pages.h"
 #include "effects.h"
+#include "scrambler.h"
 #include <algorithm>
 #include <cstdint>
 
@@ -2047,6 +2048,55 @@ static void TestEffectsStable() {
     CHECK(finite && peak <= 1.f, "every effect at once: finite %d, peak %g", (int)finite, peak);
 }
 
+// Runs a scrambler for `seconds` (block 48: Update per block, Process per sample) on a sine
+static std::vector<float> RunScrambler(bitch::Scrambler &s, float amount, bool hopping, float seconds, float hz) {
+    std::vector<float> out;
+    for (int b = 0; b < (int)(seconds * kSampleRate / 48); b++) {
+        s.Update(amount, hopping, 48.f / kSampleRate);
+        for (int k = 0; k < 48; k++) out.push_back(s.Process(Sine(hz, 0.25f, b * 48 + k)));
+    }
+    return out;
+}
+
+static void TestScrambler() {
+    CHECK(bitch::EffectRange(0.35f) == 0.f && bitch::EffectRange(1.f) == 1.f &&
+              fabsf(bitch::EffectRange(0.675f) - 0.5f) < 1e-6f,
+          "EffectRange");
+    bitch::Scrambler s;
+    s.Init(kSampleRate, 5u);
+    // Amount 0.35: inverted around 3.4 kHz, so 1 kHz comes out at 2.4 kHz
+    auto w = Window(RunScrambler(s, 0.35f, false, 0.5f, 1000.f), 0.25f, 0.5f);
+    CHECK(fabsf(s.InversionHz() - 3400.f) < 1.f, "scrambler: inverts at %.0f Hz (want 3400)", s.InversionHz());
+    CHECK(Magnitude(w, 2400.f) > 10 * Magnitude(w, 1000.f) && Magnitude(w, 2400.f) > 10 * Magnitude(w, 4400.f),
+          "scrambler: 2400 Hz %.4f, 1000 Hz %.4f, 4400 Hz %.4f", Magnitude(w, 2400.f), Magnitude(w, 1000.f),
+          Magnitude(w, 4400.f));
+    // Amount 1: inverted around 1.2 kHz, so 400 Hz comes out at 800 Hz
+    s.Reset();
+    w = Window(RunScrambler(s, 1.f, false, 0.5f, 400.f), 0.25f, 0.5f);
+    CHECK(Magnitude(w, 800.f) > 10 * Magnitude(w, 400.f), "scrambler at 1.2 kHz: 800 Hz %.4f, 400 Hz %.4f",
+          Magnitude(w, 800.f), Magnitude(w, 400.f));
+    // Above the inversion frequency: removed, not folded back
+    s.Reset();
+    w = Window(RunScrambler(s, 1.f, false, 0.5f, 3000.f), 0.25f, 0.5f);
+    CHECK(Rms(w) < 0.02f, "scrambler: 3 kHz above a 1.2 kHz inversion still %.4f", Rms(w));
+    // Hopping at amount 1: a new inversion frequency every 0.1 s, between 1 and 4 kHz
+    s.Reset();
+    std::vector<float> seen;
+    for (int b = 0; b < (int)(2.f * kSampleRate / 48); b++) {
+        s.Update(1.f, true, 48.f / kSampleRate);
+        for (int k = 0; k < 48; k++) s.Process(0.f);
+        if (b % 50 == 49) seen.push_back(s.InversionHz());
+    }
+    int changes = 0;
+    bool in_range = true;
+    for (size_t k = 1; k < seen.size(); k++) {
+        changes += fabsf(seen[k] - seen[k - 1]) > 10.f;
+        in_range = in_range && seen[k] >= 999.f && seen[k] <= 4001.f;
+    }
+    CHECK(changes >= 10 && in_range, "hopping scrambler: %d changes in 2 s (want >= 10), in range %d", changes,
+          (int)in_range);
+}
+
 int main() {
     TestSoftQuantize();
     TestSoftClip();
@@ -2128,6 +2178,7 @@ int main() {
     TestEffectSpins();
     TestEffectDriftLinked();
     TestEffectsStable();
+    TestScrambler();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }

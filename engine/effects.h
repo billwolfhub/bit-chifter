@@ -23,6 +23,12 @@ enum Effect : int {
 inline uint32_t Bit(Effect e) { return 1u << e; }
 inline bool Has(uint32_t effects, Effect e) { return (effects >> e) & 1u; }
 
+// An effect's amount (0.35-1, from RECEPTION) as 0-1, for its range
+inline float EffectRange(float amount) {
+    float u = (amount - 0.35f) / 0.65f;
+    return u < 0.f ? 0.f : (u > 1.f ? 1.f : u);
+}
+
 // The effect on pad `channel` (0-9, the MPR121 channels in the README's pad map) of `page`
 // (0-2), or -1. The big pads (4, 6) get each page's first two effects, the narrow top
 // centre (1, hard to reach) the last.
