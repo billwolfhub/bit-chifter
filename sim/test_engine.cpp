@@ -37,6 +37,8 @@
 #include <algorithm>
 #include <cstdint>
 
+static bitch::TapeMemory test_tape; // ~1.1 MB: off the stack
+
 static int failures = 0;
 #define CHECK(cond, ...)                                                   \
     do {                                                                   \
@@ -2048,11 +2050,11 @@ static void TestEffectDriftLinked() {
 }
 
 // Every effect at once (but Squelch and Fade-out) at the extremes, the spins switching every
-// second: the output stays finite and within +-1
+// second and switch 2 every 2 s: the output stays finite and within +-1
 static void TestEffectsStable() {
     static bitch::Engine e;
     static bitch::PlateReverb plate;
-    e.Init(kSampleRate, 48, &plate);
+    e.Init(kSampleRate, 48, &plate, &test_tape);
     bitch::Params p;
     p.feedback = 0.95f;
     p.reception = 1.f;
@@ -2072,6 +2074,7 @@ static void TestEffectsStable() {
     const int blocks_per_s = (int)(kSampleRate / 48);
     for (int b = 0; b < 30 * blocks_per_s; b++) {
         p.effects = base | kSpins[(b / blocks_per_s) % 4];
+        p.capture = (bitch::CaptureMode)((b / (2 * blocks_per_s)) % 3); // switch 2 through all three
         for (int k = 0; k < 48; k++) {
             in_l[k] = 0.9f * noise_l.Bipolar();
             in_r[k] = 0.9f * noise_r.Bipolar();
@@ -2850,10 +2853,10 @@ static int EchoArrival(bitch::EchoLoop &e, float time_s, bool reverse, std::vect
     int arrival = -1;
     float best = 0.f;
     for (int b = 0; b < (int)(2.f * kSampleRate / 48); b++) {
-        e.Update(time_s, reverse, 48);
+        e.Update(time_s, 48);
         for (int k = 0; k < 48; k++) {
             int n = b * 48 + k;
-            float y = e.Read();
+            float y = e.Read(reverse ? 1.f : 0.f);
             e.Write(n == 0 ? 0.5f : 0.f);
             if (out) out->push_back(y);
             if (fabsf(y) > best) {
@@ -2877,7 +2880,7 @@ static void TestEchoLoop() {
           (int)(0.3f * kSampleRate));
     // Time changes glide (~0.5 s): 0.2 s after a change from 0.3 to 0.6 s the time is in between
     for (int b = 0; b < (int)(0.2f * kSampleRate / 48); b++) { // the glide runs per sample, in Read()
-        e.Update(0.6f, false, 48);
+        e.Update(0.6f, 48);
         for (int k = 0; k < 48; k++) {
             e.Read();
             e.Write(0.f);
@@ -2893,10 +2896,10 @@ static void TestEchoLoop() {
     std::vector<float> out;
     int falling = 0, rising = 0;
     for (int b = 0; b < (int)(2.f * kSampleRate / 48); b++) {
-        rev.Update(0.4f, true, 48);
+        rev.Update(0.4f, 48);
         for (int k = 0; k < 48; k++) {
             int n = b * 48 + k;
-            out.push_back(rev.Read());
+            out.push_back(rev.Read(1.f));
             rev.Write(0.25f * (float)(n % 4800) / 4800.f); // rising 100 ms ramps
         }
     }
@@ -2915,7 +2918,7 @@ static void TestEchoLoop() {
         t.SetTimeNow(0.01f);
         std::vector<float> y;
         for (int n = 0; n < 24000; n++) {
-            if (n % 48 == 0) t.Update(0.01f, false, 48);
+            if (n % 48 == 0) t.Update(0.01f, 48);
             y.push_back(t.Read());
             t.Write(Sine(hz, 0.25f, n));
         }
@@ -2965,10 +2968,10 @@ static void TestCaptureLoop() {
     auto silence = [](int) { return 0.f; };
     std::vector<float> out, live;
     int n = 0;
-    // Too little recorded: Freeze stays live
-    RunCapture(c, CaptureMode::kNormal, 0.01f, noise, n, out, live);
-    RunCapture(c, CaptureMode::kFreeze, 0.03f, noise, n, out, live);
-    CHECK(out == live, "capture: froze before it had 50 ms");
+    // Too little recorded: Freeze stays live (it needs a full 250 ms slice)
+    RunCapture(c, CaptureMode::kNormal, 0.1f, noise, n, out, live);
+    RunCapture(c, CaptureMode::kFreeze, 0.12f, noise, n, out, live);
+    CHECK(out == live, "capture: froze before it had 250 ms");
     // Normal: exactly the live input
     out.clear();
     live.clear();
@@ -3000,14 +3003,13 @@ static void TestCaptureLoop() {
     live.clear();
     RunCapture(c, CaptureMode::kFreeze, 3.f, silence, n, out, live);
     float early = Rms(Window(out, 0.1f, 0.5f)), late = Rms(Window(out, 2.5f, 3.f));
-    CHECK(late > 0.1f && fabsf(Db(late / early)) < 3.f, "freeze: level %.3f then %.3f", early, late);
+    CHECK(late > 0.1f && fabs(Db(late / early)) < 3.0, "freeze: level %.3f then %.3f", early, late);
     CHECK(Magnitude(Window(out, 1.f, 3.f), 440.f) > 0.1, "freeze: not the tone");
     step = 0.f;
     for (size_t k = 1; k < out.size(); k++) step = std::max(step, fabsf(out[k] - out[k - 1]));
     CHECK(step < 0.03f, "freeze: a step of %.4f (the tone's own is 0.0144)", step);
 }
 
-static bitch::TapeMemory test_tape; // ~1.1 MB: off the stack
 
 // Capture in the engine: Freeze holds the input (the whole chain, dry included, plays it)
 static void TestEngineCapture() {
@@ -3066,33 +3068,117 @@ static void TestEffectEchoes() {
     n = 0;
     RunFor(plain, p, 1.f, burst, n, pl, pr);
     CHECK(Rms(Window(pl, 0.16f, 0.24f)) < 1e-3f, "no echo pad: repeats anyway (%g)", Rms(Window(pl, 0.16f, 0.24f)));
-    // Ping-pong: the repeats cross sides (the left input's burst repeats on the right)
-    bitch::Engine pp;
-    pp.Init(kSampleRate, 48, nullptr, &test_tape);
-    p.effects = bitch::Bit(bitch::kPingPongEchoes);
-    p.tune_hz = 0.f;
-    float in_l[48], in_r[48], out_l[48], out_r[48];
-    std::vector<float> ppl, ppr;
-    for (int b = 0; b < (int)(0.2f * kSampleRate / 48); b++) {
-        for (int k = 0; k < 48; k++) {
-            in_l[k] = 0.f;
-            in_r[k] = Sine(5000.f, 0.002f, k);
+    // Ping-pong (Linked and Mirror): a burst on the left repeats on the right (shifted down
+    // there), then back on the left (shifted up again). Noise on both inputs first, so both
+    // count as used (mono detection would otherwise copy the left into the right)
+    for (int mode = 0; mode < 2; mode++) {
+        bitch::Engine pp;
+        pp.Init(kSampleRate, 48, nullptr, &test_tape);
+        bitch::Params q;
+        q.tune_hz = 100.f;
+        q.effect_amount = 0.35f;
+        q.stereo_mode = mode ? bitch::StereoMode::kMirror : bitch::StereoMode::kLinked;
+        bitch::Random noise(1u);
+        float in_l[48], in_r[48], out_l[48], out_r[48];
+        for (int b = 0; b < (int)(0.3f * kSampleRate / 48); b++) {
+            if (b == (int)(0.05f * kSampleRate / 48)) q.effects = bitch::Bit(bitch::kPingPongEchoes);
+            for (int k = 0; k < 48; k++)
+                in_l[k] = in_r[k] = b < (int)(0.05f * kSampleRate / 48) ? 0.1f * noise.Bipolar() : 0.f;
+            pp.Process(in_l, in_r, out_l, out_r, 48, q);
         }
-        pp.Process(in_l, in_r, out_l, out_r, 48, p);
-    }
-    for (int b = 0; b < (int)(1.f * kSampleRate / 48); b++) {
-        for (int k = 0; k < 48; k++) {
-            in_l[k] = burst(b * 48 + k);
-            in_r[k] = Sine(5000.f, 0.002f, b * 48 + k); // a faint right input, above -60 dBFS so mono
-                                                        // detection doesn't copy the left into it
+        std::vector<float> ppl, ppr;
+        for (int b = 0; b < (int)(1.f * kSampleRate / 48); b++) {
+            for (int k = 0; k < 48; k++) {
+                in_l[k] = burst(b * 48 + k);
+                in_r[k] = 0.f;
+            }
+            pp.Process(in_l, in_r, out_l, out_r, 48, q);
+            ppl.insert(ppl.end(), out_l, out_l + 48);
+            ppr.insert(ppr.end(), out_r, out_r + 48);
         }
-        pp.Process(in_l, in_r, out_l, out_r, 48, p);
-        ppl.insert(ppl.end(), out_l, out_l + 48);
-        ppr.insert(ppr.end(), out_r, out_r + 48);
+        const char *name = mode ? "Mirror" : "Linked";
+        auto r1 = Window(ppr, 0.16f, 0.24f), l1 = Window(ppl, 0.16f, 0.24f);
+        auto l2 = Window(ppl, 0.31f, 0.39f), r2 = Window(ppr, 0.31f, 0.39f);
+        CHECK(Magnitude(r1, 1000.f) > 3 * Magnitude(r1, 1200.f) && Rms(r1) > 3 * Rms(l1),
+              "ping-pong %s: 1st repeat right 1000 Hz %.4f, 1200 Hz %.4f; right %.4f vs left %.4f", name,
+              Magnitude(r1, 1000.f), Magnitude(r1, 1200.f), Rms(r1), Rms(l1));
+        CHECK(Magnitude(l2, 1100.f) > 3 * Magnitude(l2, 1300.f) && Rms(l2) > 3 * Rms(r2),
+              "ping-pong %s: 2nd repeat left 1100 Hz %.4f, 1300 Hz %.4f; left %.4f vs right %.4f", name,
+              Magnitude(l2, 1100.f), Magnitude(l2, 1300.f), Rms(l2), Rms(r2));
     }
-    CHECK(Rms(Window(ppr, 0.16f, 0.24f)) > 3 * Rms(Window(ppl, 0.16f, 0.24f)),
-          "ping-pong: first repeat right %.4f vs left %.4f", Rms(Window(ppr, 0.16f, 0.24f)),
-          Rms(Window(ppl, 0.16f, 0.24f)));
+}
+
+// Released, the echoes ring out at the feedback setting (no new sound goes in), then stop
+static void TestEffectEchoesRingOut() {
+    bitch::Engine e;
+    e.Init(kSampleRate, 48, nullptr, &test_tape);
+    bitch::Params p;
+    p.feedback = 0.6f;
+    p.effect_amount = 0.35f; // 150 ms
+    p.effects = bitch::Bit(bitch::kEchoes);
+    std::vector<float> l, r;
+    int n = 0;
+    RunFor(e, p, 0.2f, [](int) { return 0.f; }, n, l, r);
+    l.clear();
+    r.clear();
+    const int start = n;
+    auto burst = [start](int k) { return k - start < 2400 ? Sine(500.f, 0.25f, k - start) : 0.f; }; // 50 ms
+    RunFor(e, p, 0.06f, burst, n, l, r);
+    p.effects = 0u; // released before the first repeat
+    RunFor(e, p, 0.94f, burst, n, l, r);
+    float level[4];
+    for (int k = 0; k < 4; k++) level[k] = Rms(Window(l, 0.15f * k + 0.005f, 0.15f * k + 0.045f));
+    for (int k = 1; k < 4; k++)
+        CHECK(fabs(Db(level[k] / (0.6f * level[k - 1]))) < 3.0, "ring out: repeat %d at %.4f after %.4f (want 0.6x)",
+              k, level[k], level[k - 1]);
+    RunFor(e, p, 4.f, [](int) { return 0.f; }, n, l, r);
+    float tail = std::max(Peak(Window(l, 4.5f, 5.f)), Peak(Window(r, 4.5f, 5.f)));
+    CHECK(tail < 1e-4f, "ring out: still sounding after 4 s (%g)", tail);
+}
+
+// Toggling Reverse, Ping-pong, Spiral up, Chirp and Warble while Echoes is held doesn't click
+// (as NoClickWorstRatio, on both sides)
+static float EchoNoClickWorstRatio(uint32_t seed) {
+    const bitch::Effect kToggled[5] = {bitch::kReverseEchoes, bitch::kPingPongEchoes, bitch::kSpiralUp,
+                                       bitch::kChirp, bitch::kWarble};
+    bitch::Engine e;
+    e.Init(kSampleRate, 48, nullptr, &test_tape);
+    bitch::Params p;
+    p.mix = 0.5f;
+    p.tune_hz = 50.f;
+    p.feedback = 0.6f;
+    p.effects = bitch::Bit(bitch::kEchoes);
+    std::vector<float> l, r;
+    int n = 0;
+    auto tone = [](int k) { return Sine(200.f, 0.3f, k); };
+    RunFor(e, p, 0.5f, tone, n, l, r); // the echo running, its repeats built up
+    const size_t base = l.size();
+    const int kToggles = 60;
+    const size_t segment = (size_t)(0.05f * kSampleRate), fade = (size_t)(0.035f * kSampleRate);
+    for (int i = 0; i < kToggles; i++) {
+        seed = seed * 1664525u + 1013904223u;
+        p.effects ^= bitch::Bit(kToggled[(seed >> 16) % 5]);
+        RunFor(e, p, 0.05f, tone, n, l, r);
+    }
+    auto max_step = [&](size_t from, size_t to) {
+        float step = 0.f;
+        for (size_t k = std::max<size_t>(from, 1); k < std::min(to, l.size()); k++)
+            step = std::max(step, std::max(fabsf(l[k] - l[k - 1]), fabsf(r[k] - r[k - 1])));
+        return step;
+    };
+    float worst = 0.f;
+    for (int i = 1; i < kToggles; i++) {
+        size_t at = base + i * segment;
+        float during = max_step(at, at + fade);
+        float steady = std::max(max_step(at - (segment - fade), at), max_step(at + fade, at + segment));
+        if (steady > 0.f) worst = std::max(worst, during / steady);
+    }
+    return worst;
+}
+
+static void TestEffectsEchoNoClick() {
+    float a = EchoNoClickWorstRatio(17u), b = EchoNoClickWorstRatio(4242u);
+    CHECK(a < 2.5f && b < 2.5f, "page 1 pads on/off with Echoes held: a step %.2fx / %.2fx the steady ones", a, b);
 }
 
 // Spiral up: the sound keeps rising (a Shepard-like pair of shifted voices); spiral down falls
@@ -3145,6 +3231,103 @@ static void TestEffectWarble() {
         hi = std::max(hi, trace[k]);
     }
     CHECK(hi - lo > 15.f && hi - lo < 60.f && lo > 60.f && hi < 140.f, "warble at 0.35: %.1f-%.1f Hz", lo, hi);
+}
+
+// 10 ms RMS frames (every 2.5 ms) of x from sample `from` on: the lowest and highest
+static void RmsRange(const std::vector<float> &x, size_t from, float &lo, float &hi) {
+    lo = 1e9f;
+    hi = 0.f;
+    const size_t frame = (size_t)(0.01f * kSampleRate), hop = frame / 4;
+    for (size_t s = from; s + frame <= x.size(); s += hop) {
+        double e = 0.0;
+        for (size_t k = s; k < s + frame; k++) e += (double)x[k] * x[k];
+        float rms = sqrtf((float)(e / frame));
+        lo = std::min(lo, rms);
+        hi = std::max(hi, rms);
+    }
+}
+
+static float MaxStep(const std::vector<float> &x) {
+    float step = 0.f;
+    for (size_t k = 1; k < x.size(); k++) step = std::max(step, fabsf(x[k] - x[k - 1]));
+    return step;
+}
+
+// Freeze holds any pitch steady (no comb, no flutter); Freeze <-> Loop crossfade directly; a
+// capture after Normal uses only the audio recorded since; at Freeze from boot it waits for a
+// full slice
+static void TestCaptureFreezeAndSwitching() {
+    using bitch::CaptureMode;
+    auto silence = [](int) { return 0.f; };
+    for (float hz : {300.f, 110.f}) {
+        bitch::CaptureLoop c;
+        c.Init(kSampleRate, capture_l, capture_r);
+        std::vector<float> out, live;
+        int n = 0;
+        RunCapture(c, CaptureMode::kNormal, 1.f, [hz](int k) { return Sine(hz, 0.25f, k); }, n, out, live);
+        out.clear();
+        RunCapture(c, CaptureMode::kFreeze, 2.f, silence, n, out, live);
+        float lo, hi;
+        RmsRange(out, (size_t)(0.1f * kSampleRate), lo, hi);
+        CHECK(lo > 0.1f && Db(hi / lo) < 3.0, "freeze %.0f Hz: 10 ms level %.4f-%.4f (%.1f dB swing)", hz, lo, hi,
+              Db(hi / lo));
+        CHECK(MaxStep(out) < 0.03f, "freeze %.0f Hz: a step of %.4f", hz, MaxStep(out));
+    }
+    {
+        // Freeze -> Loop, input silent: straight from one to the other, never down through live
+        bitch::CaptureLoop c;
+        c.Init(kSampleRate, capture_l, capture_r);
+        std::vector<float> out, live;
+        int n = 0;
+        RunCapture(c, CaptureMode::kNormal, 1.f, [](int k) { return Sine(300.f, 0.25f, k); }, n, out, live);
+        out.clear();
+        RunCapture(c, CaptureMode::kFreeze, 1.f, silence, n, out, live);
+        float frozen = Rms(Window(out, 0.5f, 1.f));
+        out.clear();
+        RunCapture(c, CaptureMode::kLoop, 0.3f, silence, n, out, live);
+        float lo, hi;
+        RmsRange(out, 0, lo, hi);
+        CHECK(lo > 0.5f * frozen, "freeze -> loop: down to %.4f (frozen %.4f)", lo, frozen);
+        out.clear();
+        RunCapture(c, CaptureMode::kFreeze, 0.3f, silence, n, out, live);
+        RmsRange(out, 0, lo, hi);
+        CHECK(lo > 0.5f * frozen, "loop -> freeze: down to %.4f (frozen %.4f)", lo, frozen);
+    }
+    {
+        // Recapture on a steady tone: Loop, Normal for 100 ms, then Freeze (and the other way
+        // round): only audio recorded since Normal is used, so there's no splice (no step)
+        auto tone = [](int k) { return Sine(220.f, 0.25f, k); }; // its own step: 0.0072
+        bitch::CaptureLoop c;
+        c.Init(kSampleRate, capture_l, capture_r);
+        std::vector<float> out, live;
+        int n = 0;
+        RunCapture(c, CaptureMode::kNormal, 2.f, tone, n, out, live);
+        RunCapture(c, CaptureMode::kLoop, 1.013f, tone, n, out, live);
+        RunCapture(c, CaptureMode::kNormal, 0.1f, tone, n, out, live);
+        out.clear();
+        RunCapture(c, CaptureMode::kFreeze, 1.f, tone, n, out, live);
+        CHECK(MaxStep(out) < 0.02f, "freeze after loop -> normal: a step of %.4f", MaxStep(out));
+        RunCapture(c, CaptureMode::kNormal, 0.1f, tone, n, out, live);
+        out.clear();
+        RunCapture(c, CaptureMode::kLoop, 1.f, tone, n, out, live);
+        CHECK(MaxStep(out) < 0.02f, "loop after freeze -> normal: a step of %.4f", MaxStep(out));
+    }
+    {
+        // Switch at Freeze from boot: live until a full slice (250 ms) is recorded, then frozen
+        uint32_t seed = 11;
+        auto noise = [&seed](int k) {
+            seed = seed * 1664525u + 1013904223u;
+            return k < (int)(0.3f * kSampleRate) ? ((seed >> 8) / 8388608.f - 1.f) * 0.25f : 0.f;
+        };
+        bitch::CaptureLoop c;
+        c.Init(kSampleRate, capture_l, capture_r);
+        std::vector<float> out, live;
+        int n = 0;
+        RunCapture(c, CaptureMode::kFreeze, 0.8f, noise, n, out, live);
+        const size_t slice = (size_t)(0.25f * kSampleRate);
+        CHECK(std::equal(out.begin(), out.begin() + slice, live.begin()), "boot at Freeze: froze before 250 ms");
+        CHECK(Rms(Window(out, 0.4f, 0.8f)) > 0.05f, "boot at Freeze: never froze (%g)", Rms(Window(out, 0.4f, 0.8f)));
+    }
 }
 
 int main() {
@@ -3254,6 +3437,9 @@ int main() {
     TestEffectSpiral();
     TestEffectChirp();
     TestEffectWarble();
+    TestCaptureFreezeAndSwitching();
+    TestEffectEchoesRingOut();
+    TestEffectsEchoNoClick();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }

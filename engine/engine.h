@@ -65,6 +65,8 @@ struct Params {
 // Pad effects (Params::effects, see effects.h) each fade in and out over ~30 ms; with none on, the sound is unchanged.
 // Page 3's damage pads (codec warble, sample-rate crush, bitcrush, stutter, dropouts) work on the whole sound: after the dry/wet mix and the reverb, before the soft clip.
 // Capture (switch 2: Normal / Freeze / Loop) sits at the very start, so everything after it hears the captured sound.
+// Page 1: the echo pads grow the shifter's feedback into a 150-900 ms echo whose repeats are shifted again each time
+// (released, they ring out at the feedback); spiral, chirp and warble move the shift.
 class Engine {
   public:
     // block_size: the size every Process() call will use (the firmware and sim use 48).
@@ -164,15 +166,21 @@ class Engine {
     TapeMemory *tape_ = nullptr;
     CaptureLoop capture_;
     EchoLoop echo_[2];
-    float echo_level_ = 0.f;   // the echo pads' level at the end of the last block (ramped per sample)
+    Shifter echo_shift_[2];    // shifts each repeat again on its way round (apart from the direct sound)
+    float echo_send_ = 0.f;    // how much new sound goes in: the pads' level, glided in from the start
+    float echo_reverse_ = 0.f, echo_ping_pong_ = 0.f; // 0-1, glided; kept while the echo rings out
+    int echo_quiet_ = 0;       // blocks the released echo's return has stayed below 1e-4
     bool echo_running_ = false, echo_clean_ = false; // like the plate: cleared in steps while idle
     // Motion pads (page 1)
     Shifter spiral_[2];          // the spiral's second voice, per side
     float spiral_phase_ = 0.f;   // 0-1 around the spiral's cycle
-    float spiral_dir_ = 1.f;     // +1 up, -1 down (the last spiral pad touched)
+    float spiral_dir_ = 1.f;     // +1 up, -1 down, glided towards spiral_dir_target_
+    float spiral_dir_target_ = 1.f; // the last spiral pad touched
     float spiral_level_ = 0.f;   // at the end of the last block (ramped per sample)
     bool spiral_running_ = false;
     float chirp_envelope_ = 0.f, chirp_attack_ = 0.f, chirp_release_ = 0.f;
+    float chirp_depth_ = 0.f; // the last block's depth (ramped)
+    float block_rate_ = 1000.f;
     float warble_phase_ = 0.f, warble_hz_ = 0.f; // warble_hz_: the last block's value (ramped)
     Wander warble_wander_;
     bool spiral_up_was_ = false, spiral_down_was_ = false;

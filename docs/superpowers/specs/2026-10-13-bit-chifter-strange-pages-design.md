@@ -58,13 +58,16 @@ when off, and fades in and out over 10–30 ms so switching never clicks.
   further (with TUNE off centre: spiralling, chiming repeats). Feedback is the FEEDBACK
   knob, but at least 50% while an echo is on. Changes of echo time glide over ~0.5 s like
   tape, warping the pitch. A gentle low-pass (~6 kHz) and the existing soft clip sit in the
-  loop.
+  loop. The pads send new sound into the echo; on release the repeats ring out at the
+  feedback setting (no new sound goes in, and the shifter's own 2 ms feedback comes back),
+  and the echo stops once they have died away (touching a pad again before then carries on).
 - **Reverse echoes:** like Echoes, but each repeat plays backwards (the delay is read in
   reverse, in crossfaded windows one echo long).
 - **Ping-pong echoes:** like Echoes, but the repeats alternate between the sides, the left
-  loop shifting up and the right shifting down.
+  loop shifting up and the right shifting down (in any stereo mode).
 - The three echo pads combine: any of them turns the echo on; Reverse and Ping-pong add
-  their behaviour.
+  their behaviour, crossfading in and out with their pads (~30 ms) while an echo pad is
+  held, and keeping it while the echo rings out.
 - **Spiral up / Spiral down:** an endless rising or falling shift, like a Shepard tone.
   Each side runs a second shifter; the two shifters' extra shifts ramp from 0 to 300 Hz,
   half a cycle apart, and crossfade so each ramp's restart is silent. Rate 0.05 (a = 0.35)
@@ -150,13 +153,18 @@ path, before the AGC, they were masked whenever MIX was partly dry).
 At the input, before Drive, so the whole chain (dry included) processes the captured sound.
 
 - **Normal:** live input.
-- **Freeze:** on entering, the last 250 ms are held as an endless sound: two overlapping
-  read heads with smooth (Hann) windows loop the slice, so it drones without clicking or
-  fluttering.
-- **Loop:** on entering, the last 2 s are looped, with a 20 ms crossfade at the loop
-  point.
-- Returning to Normal crossfades back to the live input over 30 ms. Moving between Freeze
-  and Loop captures afresh.
+- **Freeze:** on entering, the last 250 ms are held as an endless sound: three overlapping
+  read heads with smooth (sin²) windows play grains of the slice; each head jumps to a new
+  random place whenever its window is at 0, nudged to the nearby place that best matches
+  the head it overlaps (a short cross-correlation search), so it drones without clicking,
+  combing or fluttering, and without a fixed repetition.
+- **Loop:** on entering, everything recorded since the last Normal (up to 2 s) is looped,
+  with a 20 ms crossfade at the loop point.
+- Returning to Normal crossfades back to the live input over 30 ms and starts a new
+  recording, so a capture only ever holds contiguous audio; nothing is captured until a
+  full 250 ms has been recorded (e.g. with the switch at Freeze from power-up).
+- Moving between Freeze and Loop plays the same capture, crossfading directly between them
+  over 30 ms (each starting in step with the other).
 
 ## Architecture
 
@@ -174,8 +182,9 @@ At the input, before Drive, so the whole chain (dry included) processes the capt
   1. **Capture**
   2. **+ Selcall bursts** → Drive → **Scrambler** → Ring mod
   3. Shifter: shift = dial + tuning hand + **chirp + warble + spin + spiral**, then
-     detents, stereo gains and drift; **the feedback delay grows into the echoes**;
-     **a second shifter per side for the spiral**
+     detents, stereo gains and drift; **the feedback delay grows into the echoes** (their
+     repeats shifted again by a shifter of their own per side); **a second shifter per side
+     for the spiral**
   4. Fading + static + **passing carriers + Morse chimes + jammer** (Selcall goes in before the
      shifter, at 2)
   5. Radio filter → AGC
@@ -198,7 +207,9 @@ At the input, before Drive, so the whole chain (dry included) processes the capt
 - Each effect: exact pass-through when off; on/off fades without steps (largest
   sample-to-sample jump bounded); its main behaviour (e.g. echo time, crush bits, carrier
   pitch follows the dial, inversion maps 1 kHz to the expected frequency).
-- Capture: Freeze and Loop repeat the captured audio; returning to Normal is click-free.
+- Capture: Freeze and Loop repeat the captured audio; Freeze holds a tone steady (10 ms
+  level within 3 dB); Freeze <-> Loop never dips through the live input; returning to
+  Normal is click-free.
 - Pad logic: pads are on while held (several at once), a held pad keeps its page's effect,
   TOU tap steps the stereo mode, chaos picks 2–3 other effects per touch.
 - Renders for the user at each step; hardware: flash, play, CPU with everything on.

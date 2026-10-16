@@ -36,6 +36,7 @@ void Engine::Init(float sample_rate, size_t block_size, PlateReverb *plate, Tape
     plate_ = plate;
     tape_ = tape;
     float block_rate = sample_rate / (float)block_size;
+    block_rate_ = block_rate;
     for (RingMod &r : ring_) r.Init(sample_rate);
     for (Shifter &s : shifter_) s.Init(sample_rate);
     for (RadioFilter &f : filter_) f.Init(sample_rate);
@@ -60,10 +61,10 @@ void Engine::Init(float sample_rate, size_t block_size, PlateReverb *plate, Tape
     if (tape_) capture_.Init(sample_rate, tape_->capture[0], tape_->capture[1]);
     if (tape_)
         for (int c = 0; c < 2; c++) echo_[c].Init(sample_rate, tape_->echo[c]);
+    for (Shifter &s : echo_shift_) s.Init(sample_rate);
     for (Shifter &s : spiral_) s.Init(sample_rate);
     chirp_attack_ = 1.f - expf(-1.f / (0.002f * sample_rate));
     chirp_release_ = 1.f - expf(-1.f / (0.15f * sample_rate));
-    warble_wander_.Init(block_rate, 53u);
     hand_.Init(block_rate, 47u);
     pitch_.Init(sample_rate);
     squelch_attack_ = 1.f / (0.002f * sample_rate);
@@ -134,16 +135,21 @@ void Engine::Reset() {
     dropouts_.Reset();
     for (float &v : damage_level_) v = 0.f;
     if (tape_) capture_.Reset();
-    echo_level_ = 0.f;
+    echo_send_ = echo_reverse_ = echo_ping_pong_ = 0.f;
+    echo_quiet_ = 0;
     echo_running_ = false;
     echo_clean_ = false;
+    for (Shifter &s : echo_shift_) s.Reset();
     for (Shifter &s : spiral_) s.Reset();
     spiral_phase_ = 0.f;
     spiral_level_ = 0.f;
+    spiral_dir_ = spiral_dir_target_ = 1.f;
     spiral_running_ = false;
     chirp_envelope_ = 0.f;
+    chirp_depth_ = 0.f;
     warble_phase_ = 0.f;
     warble_hz_ = 0.f;
+    warble_wander_.Init(block_rate_, 53u);
     spiral_up_was_ = spiral_down_was_ = false;
 }
 
@@ -327,9 +333,13 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
     if (damaging[4]) dropouts_.Update(amount_radio);
     if (tape_) capture_.Set(params.capture);
     // The echo pads (any of the three): the shifter's 2 ms feedback grows into an echo of
-    // 150 ms (amount 0.35) to 900 ms (amount 1), with at least 50% feedback; each repeat goes
-    // through the shifter again. Like the plate, the lines are cleared in steps while idle and
-    // the echo starts only once they're clean (a pad held meanwhile waits up to ~100 ms).
+    // 150 ms (amount 0.35) to 900 ms (amount 1), with at least 50% feedback; each repeat is
+    // shifted again on its way round. The pads' level sends new sound in (the shifter's own 2 ms
+    // feedback crossfading out as it does); released, the repeats ring out at the feedback and
+    // the echo stops once its return has stayed below 1e-4 for 50 ms. Like the plate, the lines
+    // are cleared in steps while idle and the echo starts only once they're clean (a pad held
+    // meanwhile waits up to ~100 ms).
+    const bool echo_pad = Has(fx, kEchoes) || Has(fx, kReverseEchoes) || Has(fx, kPingPongEchoes);
     const float echo_want = fmaxf(fmaxf(level_[kEchoes], level_[kReverseEchoes]), level_[kPingPongEchoes]);
     if (tape_ && !echo_running_ && !echo_clean_) {
         bool a = echo_[0].ClearStep(512), b = echo_[1].ClearStep(512);
@@ -338,32 +348,56 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
     const float echo_time = 0.15f + 0.75f * EffectRange(amount_radio);
     if (tape_ && !echo_running_ && echo_clean_ && echo_want > 0.f) {
         echo_running_ = true;
+        echo_send_ = 0.f;
+        echo_quiet_ = 0;
+        echo_reverse_ = Has(fx, kReverseEchoes) ? 1.f : 0.f; // the lines are silent: no need to fade these
+        echo_ping_pong_ = Has(fx, kPingPongEchoes) ? 1.f : 0.f;
         for (EchoLoop &el : echo_) el.SetTimeNow(echo_time);
+        for (Shifter &s : echo_shift_) s.Reset();
     }
-    const float echo_from = echo_running_ ? echo_level_ : 0.f, echo_to = echo_running_ ? echo_want : 0.f;
-    echo_level_ = echo_to;
-    if (echo_running_ && echo_from == 0.f && echo_to == 0.f) {
-        echo_running_ = false;
-        echo_clean_ = false;
+    // The send glides in from 0 when the echo starts (and follows the pads' level)
+    const float send_from = echo_send_;
+    if (echo_running_) {
+        echo_send_ += block_glide_ * (echo_want - echo_send_);
+        if (fabsf(echo_want - echo_send_) < 1e-4f) echo_send_ = echo_want;
     }
-    const bool reversing = Has(fx, kReverseEchoes) || level_[kReverseEchoes] > 0.f;
-    const bool ping_pong = Has(fx, kPingPongEchoes) || level_[kPingPongEchoes] > 0.f;
+    const float send_to = echo_send_;
+    // Reverse and Ping-pong crossfade in and out with their pads (~30 ms) while an echo pad is
+    // held, keep their setting while the echo rings out, and fade out once it has stopped
+    float reverse_target = echo_reverse_, ping_pong_target = echo_ping_pong_;
+    if (echo_pad) {
+        reverse_target = Has(fx, kReverseEchoes) ? 1.f : 0.f;
+        ping_pong_target = Has(fx, kPingPongEchoes) ? 1.f : 0.f;
+    } else if (!echo_running_) {
+        reverse_target = ping_pong_target = 0.f;
+    }
+    const float reverse_from = echo_reverse_, ping_pong_from = echo_ping_pong_;
+    echo_reverse_ += block_glide_ * (reverse_target - echo_reverse_);
+    if (fabsf(reverse_target - echo_reverse_) < 1e-4f) echo_reverse_ = reverse_target;
+    echo_ping_pong_ += block_glide_ * (ping_pong_target - echo_ping_pong_);
+    if (fabsf(ping_pong_target - echo_ping_pong_) < 1e-4f) echo_ping_pong_ = ping_pong_target;
+    const float reverse_to = echo_reverse_, ping_pong_to = echo_ping_pong_;
     if (echo_running_)
-        for (EchoLoop &el : echo_) el.Update(echo_time, reversing, (int)size);
+        for (EchoLoop &el : echo_) el.Update(echo_time, (int)size);
     // Spiral: two voices (the main shifter and spiral_[c]) whose extra shifts ramp 0 -> 300 Hz
-    // (down: 0 -> -300 Hz) half a cycle apart, each weighted sin^2 of its ramp's phase, so each
-    // ramp restarts silently: an endless rise (or fall). 0.05 (amount 0.35) to 0.5 cycles/s.
+    // (down: 0 -> -300 Hz) half a cycle apart, weighted |sin| and |cos| of the ramp's phase
+    // (equal power: the voices are unrelated), so each ramp restarts silently: an endless rise
+    // (or fall). 0.05 (amount 0.35) to 0.5 cycles/s.
     // The last spiral pad touched sets the direction.
     const bool up = Has(fx, kSpiralUp), down = Has(fx, kSpiralDown);
-    if (up && !spiral_up_was_) spiral_dir_ = 1.f;
-    if (down && !spiral_down_was_) spiral_dir_ = -1.f;
+    if (up && !spiral_up_was_) spiral_dir_target_ = 1.f;
+    if (down && !spiral_down_was_) spiral_dir_target_ = -1.f;
     spiral_up_was_ = up;
     spiral_down_was_ = down;
     const float spiral_want = fmaxf(level_[kSpiralUp], level_[kSpiralDown]);
     if (spiral_want > 0.f && !spiral_running_) {
         for (Shifter &s : spiral_) s.Reset();
         spiral_running_ = true;
+        spiral_dir_ = spiral_dir_target_;
     }
+    // A change of direction while it runs glides (~30 ms) through no spiral shift
+    spiral_dir_ += block_glide_ * (spiral_dir_target_ - spiral_dir_);
+    if (fabsf(spiral_dir_target_ - spiral_dir_) < 1e-4f) spiral_dir_ = spiral_dir_target_;
     const float spiral_from = spiral_running_ ? spiral_level_ : 0.f, spiral_to = spiral_running_ ? spiral_want : 0.f;
     spiral_level_ = spiral_to;
     if (spiral_running_ && spiral_from == 0.f && spiral_to == 0.f) spiral_running_ = false;
@@ -375,9 +409,8 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
         pb -= floorf(pb);
         spiral_a = spiral_dir_ * 300.f * spiral_phase_;
         spiral_b = spiral_dir_ * 300.f * pb;
-        float sa = sinf(3.14159265359f * spiral_phase_), sb = sinf(3.14159265359f * pb);
-        weight_a = sa * sa;
-        weight_b = sb * sb;
+        weight_a = sinf(3.14159265359f * spiral_phase_); // >= 0: the phase is 0-1
+        weight_b = fabsf(cosf(3.14159265359f * spiral_phase_));
     }
     // Warble: a sine LFO plus a little randomness, 0.5-8 Hz, 20-400 Hz deep (both rising with
     // the amount); ramped across the block
@@ -393,9 +426,11 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
         warble_hz_ = 0.f;
     }
     const float warble_to = warble_hz_;
-    // Chirp: up to +300 Hz (amount 0.35) to +1500 Hz (amount 1) at full input level
-    const float chirp_level = level_[kChirp];
-    const float chirp_depth = chirp_level * (300.f + 1200.f * EffectRange(amount_radio));
+    // Chirp: up to +300 Hz (amount 0.35) to +1500 Hz (amount 1) at full input level; the depth
+    // is ramped across the block
+    const float chirp_from = chirp_depth_;
+    chirp_depth_ = level_[kChirp] * (300.f + 1200.f * EffectRange(amount_radio));
+    const float chirp_to = chirp_depth_;
 
     // The plate: idle (and skipped) at 0 or without a plate. While idle it is cleared in steps
     // (1024 floats a block, ~40 ms for all of it), and it starts again only once clean, so an
@@ -434,24 +469,27 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
         // keeps a drift (even with reception turned down).
         float lock = 0.02f * fmaxf(1.f - r * 20.f, 0.f);
         if (hold && (drift_hz_[0] != 0.f || drift_hz_[1] != 0.f)) lock = 0.f;
-        if (lock > 0.f) {
+        if (lock > 0.f && echo_ping_pong_ == 0.f) { // (not with ping-pong: the sides shift apart)
             float err = shifter_[0].Phase() - shifter_[1].Phase();
             err -= floorf(err + 0.5f); // wrapped to -0.5..0.5
             // Within rounding of in-phase: close the gap fully, since 2% of it is below float resolution
             shifter_[1].NudgePhase(fabsf(err) < 1e-5f ? err : lock * err);
         }
     }
-    if (ping_pong) gain_target[1] = -gain_target[1]; // ping-pong: the right loop shifts the other way
+    // Ping-pong: the right side shifts the other way to the left, in any mode
+    if (echo_ping_pong_ > 0.f) gain_target[1] += echo_ping_pong_ * (-gain_target[0] - gain_target[1]);
 
+    float echo_peak = 0.f; // the echo's return this block
     for (size_t i = 0; i < size; i++) {
         float x[2] = {in_l[i], in_r[i]};
         if (tape_) capture_.Process(x[0], x[1]); // switch 2: everything after hears the captured sound
         float motion = 0.f; // Chirp + Warble, added to the shift before the stereo gains
-        if (chirp_level > 0.f || chirp_envelope_ > 0.f) {
+        if (chirp_from > 0.f || chirp_to > 0.f || chirp_envelope_ > 0.f) {
             float level = fmaxf(fabsf(x[0]), fabsf(x[1]));
             chirp_envelope_ += (level > chirp_envelope_ ? chirp_attack_ : chirp_release_) * (level - chirp_envelope_);
-            if (chirp_level == 0.f && chirp_envelope_ < 1e-5f) chirp_envelope_ = 0.f;
-            motion += chirp_depth * fminf(chirp_envelope_ / 0.5f, 1.f);
+            if (chirp_to == 0.f && chirp_envelope_ < 1e-5f) chirp_envelope_ = 0.f;
+            float depth = chirp_from + (float)(i + 1) * inv_size * (chirp_to - chirp_from);
+            motion += depth * fminf(chirp_envelope_ / 0.5f, 1.f);
         }
         if (warble_from != 0.f || warble_to != 0.f) motion += warble_from + (float)(i + 1) * inv_size * (warble_to - warble_from);
         pitch_.Push(0.5f * (x[0] + x[1]));
@@ -487,14 +525,18 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
         float call = calling ? (selcall_from + t * (selcall_to - selcall_from)) * selcall_.Process() : 0.f;
         float jam = level_jammer > 0.f ? jammer_.Process() : 0.f;
         const float scramble = scramble_from + t * (scramble_to - scramble_from);
-        const float echo = echo_running_ ? echo_from + t * (echo_to - echo_from) : 0.f;
+        const float send = echo_running_ ? send_from + t * (send_to - send_from) : 0.f;
         float echo_return[2] = {0.f, 0.f};
         if (echo_running_) {
-            float a = echo_[0].Read(), b = echo_[1].Read();
-            echo_return[0] = ping_pong ? b : a; // ping-pong: each side hears the other's repeats
-            echo_return[1] = ping_pong ? a : b;
+            const float reverse = reverse_from + t * (reverse_to - reverse_from);
+            const float pp = ping_pong_from + t * (ping_pong_to - ping_pong_from);
+            float a = echo_[0].Read(reverse), b = echo_[1].Read(reverse);
+            echo_return[0] = a + pp * (b - a); // ping-pong: each side hears the other's repeats
+            echo_return[1] = b + pp * (a - b);
+            echo_peak = fmaxf(echo_peak, fmaxf(fabsf(a), fabsf(b)));
         }
-        const float echo_feedback = echo * fmaxf(fb, 0.5f);
+        const float echo_feedback = fmaxf(fb, 0.5f);
+        const float own_fb = echo_running_ ? fb * (1.f - send) : fb; // the 2 ms feedback, out while sending
         float y[2], dry[2], filtered[2];
         for (int c = 0; c < 2; c++) {
             take_other_[c] += take_glide_ * (take_target[c] - take_other_[c]);
@@ -504,20 +546,20 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
             float ringed = ring_[c].Process(driven, carrier_hz_, ring_amount_);
             float shifted;
             if (!spiral_running_) {
-                shifted = echo_running_
-                              ? shifter_[c].Process(ringed + echo_feedback * echo_return[c], shift[c] + drift_hz_[c],
-                                                    fb * (1.f - echo))
-                              : shifter_[c].Process(ringed, shift[c] + drift_hz_[c], fb);
+                shifted = shifter_[c].Process(ringed, shift[c] + drift_hz_[c], own_fb);
             } else {
                 const float spiral = spiral_from + t * (spiral_to - spiral_from);
-                float in = echo_running_ ? ringed + echo_feedback * echo_return[c] : ringed;
-                float own_fb = echo_running_ ? fb * (1.f - echo) : fb;
                 float side = side_gain_[c];
-                float a = shifter_[c].Process(in, shift[c] + drift_hz_[c] + spiral * spiral_a * side, own_fb);
-                float b = spiral_[c].Process(in, shift[c] + drift_hz_[c] + spiral * spiral_b * side, own_fb);
+                float a = shifter_[c].Process(ringed, shift[c] + drift_hz_[c] + spiral * spiral_a * side, own_fb);
+                float b = spiral_[c].Process(ringed, shift[c] + drift_hz_[c] + spiral * spiral_b * side, own_fb);
                 shifted = a * (1.f - spiral + spiral * weight_a) + b * spiral * weight_b;
             }
-            if (echo_running_) echo_[c].Write(shifted);
+            if (echo_running_) {
+                // The repeat, shifted again; the line takes it and the new sound (at the send)
+                float repeat = echo_feedback * echo_shift_[c].Process(echo_return[c], shift[c] + drift_hz_[c], 0.f);
+                echo_[c].Write(send * shifted + repeat);
+                shifted += repeat;
+            }
             float received = fading_[c].Process(shifted) + static_[c].Process();
             if (level_carriers > 0.f) received += carriers_[c].Process();
             if (level_morse > 0.f) received += morse_[c].Process();
@@ -567,6 +609,16 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
         out_r[i] = SoftClip(out[1]);
     }
     pitch_.Work();
+    // A released echo stops once its return has stayed below 1e-4 for 50 ms (its lines are then
+    // cleared in steps); touching a pad again before then just carries on
+    if (echo_running_) {
+        if (echo_pad || echo_send_ > 0.f || echo_peak >= 1e-4f) {
+            echo_quiet_ = 0;
+        } else if (++echo_quiet_ >= (int)(0.05f * sample_rate_ / (float)size)) {
+            echo_running_ = false;
+            echo_clean_ = false;
+        }
+    }
     // Hold: a side counts as active at once when its envelope passes kSilent, and as unused
     // only after it has stayed below kQuiet for 3 s
     const int hold_blocks = (int)(3.f * sample_rate_ / (float)size);

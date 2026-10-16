@@ -4,7 +4,7 @@
 
 **Goal:** Build page 1's remaining pads (Echoes, Reverse echoes, Ping-pong echoes, Spiral up/down, Chirp, Warble) and switch 2's capture modes (Normal / Freeze / Loop).
 
-**Architecture:** Two new buffer classes, `EchoLoop` (a 1 s delay with a tape-like gliding time, a low-pass and soft clip on the way in, a reverse read with two crossfading heads, and stepwise clearing) and `CaptureLoop` (a 2 s stereo recorder that freezes the last 250 ms as a drone or loops the last 2 s), share one SDRAM block, `TapeMemory`, which the front end owns and passes to `Engine::Init` (like the plate reverb); without it, the echo pads and capture do nothing. The echo replaces the shifter's 2 ms feedback while its pads are held (crossfaded by the pads' level), so each repeat is shifted again. The spiral runs a second `Shifter` per side as the second voice of a Shepard-style pair. Chirp (an envelope follower) and Warble (an LFO) add to the shift before the stereo gains. Capture sits at the very start of the chain, so everything after it, the dry signal and the pitch tracker included, hears the captured sound. With the pads off and switch 2 at Normal, the sound is bit-for-bit unchanged.
+**Architecture:** Two new buffer classes, `EchoLoop` (a 1 s delay with a tape-like gliding time, a low-pass and soft clip on the way in, a reverse read with two crossfading heads that can blend with the forward read, and stepwise clearing) and `CaptureLoop` (a 2 s stereo recorder that freezes the last 250 ms as a drone, with three phase-matched grain heads, or loops what it recorded; Freeze and Loop crossfade directly into each other), share one SDRAM block, `TapeMemory`, which the front end owns and passes to `Engine::Init` (like the plate reverb); without it, the echo pads and capture do nothing. The echo replaces the shifter's 2 ms feedback while its pads are held (crossfaded by the pads' level, which also sends new sound in); each repeat is shifted again by a shifter of its own, and on release the repeats ring out at the feedback until they have died away. The spiral runs a second `Shifter` per side as the second voice of a Shepard-style pair. Chirp (an envelope follower) and Warble (an LFO) add to the shift before the stereo gains. Capture sits at the very start of the chain, so everything after it, the dry signal and the pitch tracker included, hears the captured sound. With the pads off and switch 2 at Normal, the sound is bit-for-bit unchanged.
 
 **Tech Stack:** C++17 (also gnu++14 for the firmware), libDaisy v8.1, Apple clang for `sim/`.
 
@@ -72,10 +72,10 @@ static void TestCaptureLoop() {
     auto silence = [](int) { return 0.f; };
     std::vector<float> out, live;
     int n = 0;
-    // Too little recorded: Freeze stays live
-    RunCapture(c, CaptureMode::kNormal, 0.01f, noise, n, out, live);
-    RunCapture(c, CaptureMode::kFreeze, 0.03f, noise, n, out, live);
-    CHECK(out == live, "capture: froze before it had 50 ms");
+    // Too little recorded: Freeze stays live (it needs a full 250 ms slice)
+    RunCapture(c, CaptureMode::kNormal, 0.1f, noise, n, out, live);
+    RunCapture(c, CaptureMode::kFreeze, 0.12f, noise, n, out, live);
+    CHECK(out == live, "capture: froze before it had 250 ms");
     // Normal: exactly the live input
     out.clear();
     live.clear();
@@ -107,14 +107,111 @@ static void TestCaptureLoop() {
     live.clear();
     RunCapture(c, CaptureMode::kFreeze, 3.f, silence, n, out, live);
     float early = Rms(Window(out, 0.1f, 0.5f)), late = Rms(Window(out, 2.5f, 3.f));
-    CHECK(late > 0.1f && fabsf(Db(late / early)) < 3.f, "freeze: level %.3f then %.3f", early, late);
+    CHECK(late > 0.1f && fabs(Db(late / early)) < 3.0, "freeze: level %.3f then %.3f", early, late);
     CHECK(Magnitude(Window(out, 1.f, 3.f), 440.f) > 0.1, "freeze: not the tone");
     step = 0.f;
     for (size_t k = 1; k < out.size(); k++) step = std::max(step, fabsf(out[k] - out[k - 1]));
     CHECK(step < 0.03f, "freeze: a step of %.4f (the tone's own is 0.0144)", step);
 }
+
+// 10 ms RMS frames (every 2.5 ms) of x from sample `from` on: the lowest and highest
+static void RmsRange(const std::vector<float> &x, size_t from, float &lo, float &hi) {
+    lo = 1e9f;
+    hi = 0.f;
+    const size_t frame = (size_t)(0.01f * kSampleRate), hop = frame / 4;
+    for (size_t s = from; s + frame <= x.size(); s += hop) {
+        double e = 0.0;
+        for (size_t k = s; k < s + frame; k++) e += (double)x[k] * x[k];
+        float rms = sqrtf((float)(e / frame));
+        lo = std::min(lo, rms);
+        hi = std::max(hi, rms);
+    }
+}
+
+static float MaxStep(const std::vector<float> &x) {
+    float step = 0.f;
+    for (size_t k = 1; k < x.size(); k++) step = std::max(step, fabsf(x[k] - x[k - 1]));
+    return step;
+}
+
+// Freeze holds any pitch steady (no comb, no flutter); Freeze <-> Loop crossfade directly; a
+// capture after Normal uses only the audio recorded since; at Freeze from boot it waits for a
+// full slice
+static void TestCaptureFreezeAndSwitching() {
+    using bitch::CaptureMode;
+    auto silence = [](int) { return 0.f; };
+    for (float hz : {300.f, 110.f}) {
+        bitch::CaptureLoop c;
+        c.Init(kSampleRate, capture_l, capture_r);
+        std::vector<float> out, live;
+        int n = 0;
+        RunCapture(c, CaptureMode::kNormal, 1.f, [hz](int k) { return Sine(hz, 0.25f, k); }, n, out, live);
+        out.clear();
+        RunCapture(c, CaptureMode::kFreeze, 2.f, silence, n, out, live);
+        float lo, hi;
+        RmsRange(out, (size_t)(0.1f * kSampleRate), lo, hi);
+        CHECK(lo > 0.1f && Db(hi / lo) < 3.0, "freeze %.0f Hz: 10 ms level %.4f-%.4f (%.1f dB swing)", hz, lo, hi,
+              Db(hi / lo));
+        CHECK(MaxStep(out) < 0.03f, "freeze %.0f Hz: a step of %.4f", hz, MaxStep(out));
+    }
+    {
+        // Freeze -> Loop, input silent: straight from one to the other, never down through live
+        bitch::CaptureLoop c;
+        c.Init(kSampleRate, capture_l, capture_r);
+        std::vector<float> out, live;
+        int n = 0;
+        RunCapture(c, CaptureMode::kNormal, 1.f, [](int k) { return Sine(300.f, 0.25f, k); }, n, out, live);
+        out.clear();
+        RunCapture(c, CaptureMode::kFreeze, 1.f, silence, n, out, live);
+        float frozen = Rms(Window(out, 0.5f, 1.f));
+        out.clear();
+        RunCapture(c, CaptureMode::kLoop, 0.3f, silence, n, out, live);
+        float lo, hi;
+        RmsRange(out, 0, lo, hi);
+        CHECK(lo > 0.5f * frozen, "freeze -> loop: down to %.4f (frozen %.4f)", lo, frozen);
+        out.clear();
+        RunCapture(c, CaptureMode::kFreeze, 0.3f, silence, n, out, live);
+        RmsRange(out, 0, lo, hi);
+        CHECK(lo > 0.5f * frozen, "loop -> freeze: down to %.4f (frozen %.4f)", lo, frozen);
+    }
+    {
+        // Recapture on a steady tone: Loop, Normal for 100 ms, then Freeze (and the other way
+        // round): only audio recorded since Normal is used, so there's no splice (no step)
+        auto tone = [](int k) { return Sine(220.f, 0.25f, k); }; // its own step: 0.0072
+        bitch::CaptureLoop c;
+        c.Init(kSampleRate, capture_l, capture_r);
+        std::vector<float> out, live;
+        int n = 0;
+        RunCapture(c, CaptureMode::kNormal, 2.f, tone, n, out, live);
+        RunCapture(c, CaptureMode::kLoop, 1.013f, tone, n, out, live);
+        RunCapture(c, CaptureMode::kNormal, 0.1f, tone, n, out, live);
+        out.clear();
+        RunCapture(c, CaptureMode::kFreeze, 1.f, tone, n, out, live);
+        CHECK(MaxStep(out) < 0.02f, "freeze after loop -> normal: a step of %.4f", MaxStep(out));
+        RunCapture(c, CaptureMode::kNormal, 0.1f, tone, n, out, live);
+        out.clear();
+        RunCapture(c, CaptureMode::kLoop, 1.f, tone, n, out, live);
+        CHECK(MaxStep(out) < 0.02f, "loop after freeze -> normal: a step of %.4f", MaxStep(out));
+    }
+    {
+        // Switch at Freeze from boot: live until a full slice (250 ms) is recorded, then frozen
+        uint32_t seed = 11;
+        auto noise = [&seed](int k) {
+            seed = seed * 1664525u + 1013904223u;
+            return k < (int)(0.3f * kSampleRate) ? ((seed >> 8) / 8388608.f - 1.f) * 0.25f : 0.f;
+        };
+        bitch::CaptureLoop c;
+        c.Init(kSampleRate, capture_l, capture_r);
+        std::vector<float> out, live;
+        int n = 0;
+        RunCapture(c, CaptureMode::kFreeze, 0.8f, noise, n, out, live);
+        const size_t slice = (size_t)(0.25f * kSampleRate);
+        CHECK(std::equal(out.begin(), out.begin() + slice, live.begin()), "boot at Freeze: froze before 250 ms");
+        CHECK(Rms(Window(out, 0.4f, 0.8f)) > 0.05f, "boot at Freeze: never froze (%g)", Rms(Window(out, 0.4f, 0.8f)));
+    }
+}
 ```
-Call `TestCaptureLoop();` from `main()` (before the summary line).
+Call `TestCaptureLoop();` and `TestCaptureFreezeAndSwitching();` from `main()` (before the summary line).
 
 - [ ] **Step 2: Run to see it fail**
 
@@ -128,6 +225,9 @@ Expected: compile error, `'capture_loop.h' file not found`.
 #pragma once
 
 #include <cmath>
+#include <cstdlib>
+
+#include "random.h"
 
 namespace bitch {
 
@@ -135,42 +235,80 @@ namespace bitch {
 enum class CaptureMode { kNormal, kFreeze, kLoop };
 
 // Records the input (2 s, stereo, into buffers the caller provides: they live in SDRAM) while
-// Normal; on Freeze, holds the last 250 ms as an endless drone (two read heads half a slice
-// apart, each with a smooth sin^2 window, so they sum to a constant level); on Loop, repeats
-// the last 2 s with a 20 ms crossfade at the loop point. Recording stops while Freeze or Loop
-// plays (moving between them plays the same captured audio). Every change crossfades over
-// 30 ms against the live input; nothing is captured until 50 ms have been recorded (the
-// buffers start as SDRAM garbage, so only recorded samples are ever read). Assumes 48 kHz.
-// Set() once per block, Process() per sample.
+// Normal; on Freeze, holds the last 250 ms as an endless drone; on Loop, repeats everything
+// recorded since the last Normal (up to 2 s) with a 20 ms crossfade at the loop point.
+//
+// Freeze: three read heads, a third of a 125 ms grain apart, each with a sin^2 window (the
+// windows sum to a constant 1.5, scaled by 2/3). Whenever a head's window comes back to 0 it
+// jumps to a new place in the slice: a random one, refined (by a cross-correlation search over
+// ~10 ms, run one candidate per sample in the ~6 ms before the jump) to the nearby place that
+// best matches what the head it overlaps will play, so the heads stay in phase (a held tone
+// doesn't comb or flutter) with no fixed repetition.
+//
+// Recording stops while Freeze or Loop plays, and moving between them plays the same capture,
+// crossfading directly from one to the other over 30 ms (Loop starts where the loudest freeze
+// head is reading; Freeze starts, ~5 ms after the switch, at the place in its slice that best
+// matches the loop). To and from Normal it crossfades against the live input over 30 ms.
+// Returning to Normal starts a new recording, so a capture only ever uses contiguous audio, and
+// nothing is captured until a full slice (250 ms) has been recorded (the buffers start as SDRAM
+// garbage, so only recorded samples are ever read). Assumes 48 kHz. Set() once per block,
+// Process() per sample.
 class CaptureLoop {
   public:
     enum : int { kMax = 96000 }; // 2 s at 48 kHz
+    enum : int { kHeads = 3 };
 
     void Init(float sample_rate, float *left, float *right) {
         buffer_[0] = left;
         buffer_[1] = right;
         fade_step_ = 1.f / (0.03f * sample_rate);
         slice_ = (int)(0.25f * sample_rate);
+        grain_ = (int)(0.125f * sample_rate);
         crossfade_ = (int)(0.02f * sample_rate);
-        minimum_ = (int)(0.05f * sample_rate);
         Reset();
     }
 
     void Reset() {
         write_ = filled_ = 0;
-        playing_ = wanted_ = CaptureMode::kNormal;
+        playing_ = wanted_ = previous_ = CaptureMode::kNormal;
         mix_ = 0.f;
+        swap_ = 1.f;
+        searching_ = kNone;
+        random_.Seed(37u);
     }
 
     void Set(CaptureMode mode) {
-        if (mode != CaptureMode::kNormal && playing_ == CaptureMode::kNormal && filled_ < minimum_) return;
+        if (mode != CaptureMode::kNormal && playing_ == CaptureMode::kNormal && filled_ < slice_) return;
         wanted_ = mode;
     }
 
     void Process(float &l, float &r) {
-        // Change what plays only at silence (mix 0), so every change crossfades through live
-        if (playing_ != wanted_ && mix_ == 0.f) Start(wanted_);
-        float target = playing_ != CaptureMode::kNormal && playing_ == wanted_ ? 1.f : 0.f;
+        if (searching_ == kLoopStart && wanted_ != CaptureMode::kFreeze) searching_ = kNone; // not wanted now
+        if (playing_ != wanted_) {
+            if (playing_ == CaptureMode::kNormal) {
+                Start(wanted_, slice_ - grain_, crossfade_); // mix_ is 0 in Normal
+            } else if (wanted_ == CaptureMode::kNormal) {
+                if (mix_ == 0.f) { // faded out: record afresh
+                    playing_ = CaptureMode::kNormal;
+                    filled_ = 0;
+                    searching_ = kNone;
+                }
+            } else if (swap_ >= 1.f) { // Freeze <-> Loop: crossfade directly
+                if (wanted_ == CaptureMode::kLoop) {
+                    previous_ = playing_;
+                    swap_ = 0.f;
+                    Start(CaptureMode::kLoop, 0, LoudestHeadPosition());
+                } else if (searching_ != kLoopStart) {
+                    BeginLoopStartSearch(); // Freeze starts once it has found its place
+                } else if (searching_ == kLoopStart && candidate_ >= kCandidates) {
+                    searching_ = kNone;
+                    previous_ = playing_;
+                    swap_ = 0.f;
+                    Start(CaptureMode::kFreeze, best_, 0);
+                }
+            }
+        }
+        float target = playing_ != CaptureMode::kNormal && wanted_ != CaptureMode::kNormal ? 1.f : 0.f;
         mix_ = target > mix_ ? fminf(mix_ + fade_step_, 1.f) : fmaxf(mix_ - fade_step_, 0.f);
         if (playing_ == CaptureMode::kNormal) {
             buffer_[0][write_] = l;
@@ -179,11 +317,15 @@ class CaptureLoop {
             if (filled_ < kMax) filled_++;
             return;
         }
+        SearchStep();
         float cl, cr;
-        if (playing_ == CaptureMode::kFreeze) {
-            FreezeSample(cl, cr);
-        } else {
-            LoopSample(cl, cr);
+        Generate(playing_, cl, cr);
+        if (swap_ < 1.f) {
+            swap_ = fminf(swap_ + fade_step_, 1.f);
+            float pl, pr;
+            Generate(previous_, pl, pr);
+            cl = pl + swap_ * (cl - pl);
+            cr = pr + swap_ * (cr - pr);
         }
         l += mix_ * (cl - l);
         r += mix_ * (cr - r);
@@ -192,32 +334,151 @@ class CaptureLoop {
     int LoopSamples() const { return length_ - crossfade_; } // the loop's period, in samples
 
   private:
-    void Start(CaptureMode mode) {
+    enum : int { kRefLength = 96, kRefStride = 4 };      // the match: 96 samples over 8 ms
+    enum : int { kCandidates = 256, kCandidateStep = 2 }; // searched: +-256 samples (one 94 Hz period)
+    enum : int { kLead = 300 };                          // a head's search starts this long before its jump
+    enum : int { kNone = -1, kLoopStart = kHeads };      // searching_: none, a head, or Freeze's start
+
+    // Freeze: all three heads read the same place (`at` into the slice) to begin with.
+    // Loop: from `position`.
+    void Start(CaptureMode mode, int at, int position) {
         playing_ = mode;
-        if (mode == CaptureMode::kNormal) return;
-        end_ = write_; // one past the last recorded sample
-        int slice = slice_ < filled_ ? slice_ : filled_;
-        grain_ = slice;
-        phase_ = 0.f;
-        length_ = filled_;
-        position_ = crossfade_;
+        end_ = write_; // one past the last recorded sample (recording has stopped)
+        if (mode == CaptureMode::kFreeze) {
+            tick_ = 0;
+            fresh_ = true;
+            for (int h = 0; h < kHeads; h++) offset_[h] = at - HeadTick(h);
+        } else {
+            length_ = filled_;
+            position_ = position;
+        }
+    }
+
+    void Generate(CaptureMode mode, float &l, float &r) {
+        if (mode == CaptureMode::kFreeze) {
+            FreezeSample(l, r);
+        } else {
+            LoopSample(l, r);
+        }
     }
 
     int Wrap(int i) const { return i < 0 ? i + kMax : (i >= kMax ? i - kMax : i); }
+    int SliceStart() const { return end_ - slice_; }
 
-    // Two heads over the last `grain_` samples, half a grain apart, sin^2 windows (sum 1)
+    // Head h's sample within its grain (0 .. grain_ - 1); the heads are a third of a grain apart
+    int HeadTick(int h) const {
+        int t = tick_ + h * (grain_ / kHeads);
+        return t >= grain_ ? t - grain_ : t;
+    }
+
     void FreezeSample(float &l, float &r) {
+        // The windows: sin^2 of x, x + pi/3 and x + 2 pi/3 (the heads are a third of a grain
+        // apart, and sin^2 repeats every pi), from one sin and cos
+        static_assert(kHeads == 3, "the windows below assume three heads");
+        float x = 3.14159265359f * (float)tick_ / (float)grain_, s = sinf(x), c = cosf(x);
+        const float sines[kHeads] = {s, 0.5f * s + 0.866025404f * c, -0.5f * s + 0.866025404f * c};
         l = r = 0.f;
-        for (int head = 0; head < 2; head++) {
-            float p = phase_ + 0.5f * (float)head;
-            p -= floorf(p);
-            int i = Wrap(end_ - grain_ + (int)(p * (float)grain_));
-            float s = sinf(3.14159265359f * p), w = s * s;
+        for (int h = 0; h < kHeads; h++) {
+            int t = HeadTick(h);
+            if (t == 0 && !fresh_) { // the window is at 0: jump (but not on the first sample)
+                offset_[h] = searching_ == h && candidate_ >= kCandidates ? best_ : center_;
+                if (searching_ == h) searching_ = kNone;
+            } else if (t == grain_ - kLead && searching_ == kNone) {
+                BeginHeadSearch(h);
+            }
+            int i = Wrap(SliceStart() + offset_[h] + t);
+            float w = sines[h] * sines[h];
             l += w * buffer_[0][i];
             r += w * buffer_[1][i];
         }
-        phase_ += 1.f / (float)grain_;
-        phase_ -= floorf(phase_);
+        l *= 2.f / (float)kHeads; // the windows sum to kHeads / 2
+        r *= 2.f / (float)kHeads;
+        if (++tick_ >= grain_) tick_ = 0;
+        fresh_ = false;
+    }
+
+    // The loop's position `ahead` samples from now
+    int LoopPositionAhead(int ahead) const {
+        int q = position_ + ahead;
+        while (q >= length_) q -= length_ - crossfade_;
+        return q;
+    }
+
+    // Loop: start in step with the loudest freeze head (the one nearest the middle of its window)
+    int LoudestHeadPosition() const {
+        int loudest = 0, nearest = grain_;
+        for (int h = 0; h < kHeads; h++) {
+            int distance = abs(HeadTick(h) - grain_ / 2);
+            if (distance < nearest) {
+                nearest = distance;
+                loudest = h;
+            }
+        }
+        int index = SliceStart() + offset_[loudest] + HeadTick(loudest); // where it reads now
+        int position = index - (end_ - filled_); // into the loop (which is everything recorded)
+        if (position < 0) position += kMax;
+        return position < crossfade_ ? crossfade_ : (position >= filled_ ? filled_ - 1 : position);
+    }
+
+    // Copies the reference into ref_ (from the louder side) and starts the search around `center`
+    void BeginSearch(int who, int center, const int *reference_index) {
+        float energy[2] = {0.f, 0.f};
+        for (int c = 0; c < 2; c++)
+            for (int m = 0; m < kRefLength; m++) {
+                float v = buffer_[c][reference_index[m]];
+                energy[c] += v * v;
+            }
+        channel_ = energy[1] > energy[0] ? 1 : 0;
+        for (int m = 0; m < kRefLength; m++) ref_[m] = buffer_[channel_][reference_index[m]];
+        searching_ = who;
+        center_ = center;
+        candidate_ = 0;
+        best_ = center;
+        best_score_ = -1e30f;
+    }
+
+    // Head h jumps in kLead samples: match what head h + 1 (a third of a grain ahead, so it
+    // overlaps h longest) will play a sixth of a grain after the jump
+    void BeginHeadSearch(int h) {
+        const int range = kCandidates * kCandidateStep / 2;
+        int center = range + (int)(random_.Uniform() * (float)(slice_ - grain_ - 2 * range));
+        int ahead = (h + 1) % kHeads;
+        match_ = grain_ / 6;
+        int from = SliceStart() + offset_[ahead] + grain_ / 3 + match_;
+        int reference_index[kRefLength];
+        for (int m = 0; m < kRefLength; m++) reference_index[m] = Wrap(from + kRefStride * m);
+        BeginSearch(h, center, reference_index);
+    }
+
+    // Loop -> Freeze: the freeze starts once the search is done (kCandidates samples from now),
+    // all heads reading one place near the middle of the slice: the one that matches the loop then
+    void BeginLoopStartSearch() {
+        match_ = 0;
+        int start = end_ - length_;
+        int reference_index[kRefLength];
+        for (int m = 0; m < kRefLength; m++)
+            reference_index[m] = Wrap(start + LoopPositionAhead(kCandidates + kRefStride * m));
+        BeginSearch(kLoopStart, (slice_ - grain_) * 5 / 6, reference_index);
+    }
+
+    // One candidate a sample: candidate places center_ - range .. center_ + range
+    void SearchStep() {
+        if (searching_ == kNone || candidate_ >= kCandidates) return;
+        const int range = kCandidates * kCandidateStep / 2;
+        int place = center_ - range + kCandidateStep * candidate_;
+        int from = Wrap(SliceStart() + place + match_);
+        const float *line = buffer_[channel_];
+        float score = 0.f;
+        if (from + kRefStride * (kRefLength - 1) < kMax) { // (usually: no wrap within the match)
+            for (int m = 0; m < kRefLength; m++) score += ref_[m] * line[from + kRefStride * m];
+        } else {
+            for (int m = 0; m < kRefLength; m++) score += ref_[m] * line[Wrap(from + kRefStride * m)];
+        }
+        if (score > best_score_) {
+            best_score_ = score;
+            best_ = place;
+        }
+        candidate_++;
     }
 
     // The last `length_` samples, positions crossfade_..length_; the last crossfade_ samples
@@ -238,10 +499,18 @@ class CaptureLoop {
     }
 
     float *buffer_[2] = {nullptr, nullptr};
-    int write_ = 0, filled_ = 0, end_ = 0, slice_ = 12000, crossfade_ = 960, minimum_ = 2400;
-    int grain_ = 12000, length_ = 1, position_ = 0;
-    float fade_step_ = 0.f, mix_ = 0.f, phase_ = 0.f;
-    CaptureMode playing_ = CaptureMode::kNormal, wanted_ = CaptureMode::kNormal;
+    int write_ = 0, filled_ = 0, end_ = 0, slice_ = 12000, grain_ = 6000, crossfade_ = 960;
+    int length_ = 1, position_ = 0;
+    int offset_[kHeads] = {}; // each head's grain start, into the slice
+    int tick_ = 0;            // head 0's sample within its grain
+    bool fresh_ = false;      // the freeze's first sample
+    float fade_step_ = 0.f, mix_ = 0.f, swap_ = 1.f;
+    // The search
+    int searching_ = kNone, channel_ = 0, center_ = 0, candidate_ = 0, best_ = 0, match_ = 0;
+    float best_score_ = 0.f;
+    float ref_[kRefLength] = {};
+    Random random_;
+    CaptureMode playing_ = CaptureMode::kNormal, wanted_ = CaptureMode::kNormal, previous_ = CaptureMode::kNormal;
 };
 
 } // namespace bitch
@@ -279,10 +548,10 @@ static int EchoArrival(bitch::EchoLoop &e, float time_s, bool reverse, std::vect
     int arrival = -1;
     float best = 0.f;
     for (int b = 0; b < (int)(2.f * kSampleRate / 48); b++) {
-        e.Update(time_s, reverse, 48);
+        e.Update(time_s, 48);
         for (int k = 0; k < 48; k++) {
             int n = b * 48 + k;
-            float y = e.Read();
+            float y = e.Read(reverse ? 1.f : 0.f);
             e.Write(n == 0 ? 0.5f : 0.f);
             if (out) out->push_back(y);
             if (fabsf(y) > best) {
@@ -306,7 +575,7 @@ static void TestEchoLoop() {
           (int)(0.3f * kSampleRate));
     // Time changes glide (~0.5 s): 0.2 s after a change from 0.3 to 0.6 s the time is in between
     for (int b = 0; b < (int)(0.2f * kSampleRate / 48); b++) { // the glide runs per sample, in Read()
-        e.Update(0.6f, false, 48);
+        e.Update(0.6f, 48);
         for (int k = 0; k < 48; k++) {
             e.Read();
             e.Write(0.f);
@@ -322,10 +591,10 @@ static void TestEchoLoop() {
     std::vector<float> out;
     int falling = 0, rising = 0;
     for (int b = 0; b < (int)(2.f * kSampleRate / 48); b++) {
-        rev.Update(0.4f, true, 48);
+        rev.Update(0.4f, 48);
         for (int k = 0; k < 48; k++) {
             int n = b * 48 + k;
-            out.push_back(rev.Read());
+            out.push_back(rev.Read(1.f));
             rev.Write(0.25f * (float)(n % 4800) / 4800.f); // rising 100 ms ramps
         }
     }
@@ -344,7 +613,7 @@ static void TestEchoLoop() {
         t.SetTimeNow(0.01f);
         std::vector<float> y;
         for (int n = 0; n < 24000; n++) {
-            if (n % 48 == 0) t.Update(0.01f, false, 48);
+            if (n % 48 == 0) t.Update(0.01f, 48);
             y.push_back(t.Read());
             t.Write(Sine(hz, 0.25f, n));
         }
@@ -386,10 +655,11 @@ namespace bitch {
 // The echoes' delay: up to 1 s in a buffer the caller provides (SDRAM). Write() the loop's
 // signal (it goes in through a gentle ~6 kHz low-pass and the soft clip), Read() the echo
 // (call Read() before Write() each sample). The echo time glides towards its target over
-// ~0.5 s, like tape (warping the pitch). Reverse: two read heads, half a window apart and each
-// with a sin^2 window, sweep backwards through the last echo time, so each repeat plays
-// backwards. ClearStep() zeroes it in bounded steps (call while it isn't in use) and returns
-// true once it's clean. Assumes 48 kHz. Update() once per block.
+// ~0.5 s, like tape (warping the pitch). Reverse (Read's amount, 0-1: between them it blends
+// the two, so the pad can crossfade): two read heads, half a window apart, with sin^2 and
+// cos^2 windows, sweep backwards through the last echo time, so each repeat plays backwards.
+// ClearStep() zeroes it in bounded steps (call while it isn't in use) and returns true once
+// it's clean. Assumes 48 kHz. Update() once per block.
 class EchoLoop {
   public:
     enum : int { kMax = 48000 }; // 1 s at 48 kHz
@@ -409,28 +679,27 @@ class EchoLoop {
     // Jumps to an echo time (no glide), e.g. when the echo starts
     void SetTimeNow(float seconds) { delay_ = target_ = Samples(seconds); }
 
-    void Update(float seconds, bool reverse, int block_size) {
+    void Update(float seconds, int block_size) {
         (void)block_size;
         target_ = Samples(seconds);
-        reverse_ = reverse;
     }
 
-    float Read() {
+    // reverse: 0 forward, 1 backwards (in between: both, blended)
+    float Read(float reverse = 0.f) {
         delay_ += glide_ * (target_ - delay_);
-        if (!reverse_) return Tap(delay_);
+        if (reverse <= 0.f) return Tap(delay_);
         // Reverse: each head's distance grows 2 samples per sample (so it reads backwards)
-        // from 0 to the echo time over half an echo time
-        float out = 0.f;
+        // from 0 to the echo time over half an echo time; the second head is half a window on
         float window = 0.5f * delay_;
-        for (int head = 0; head < 2; head++) {
-            float p = phase_ + 0.5f * (float)head;
-            p -= floorf(p);
-            float s = sinf(3.14159265359f * p);
-            out += s * s * Tap(1.f + 2.f * window * p);
-        }
+        float p = phase_ + 0.5f;
+        p -= floorf(p);
+        float s = sinf(3.14159265359f * phase_), w = s * s; // the second head's window: 1 - w
+        float back = w * Tap(1.f + 2.f * window * phase_) + (1.f - w) * Tap(1.f + 2.f * window * p);
         phase_ += 1.f / window;
         phase_ -= floorf(phase_);
-        return out;
+        if (reverse >= 1.f) return back;
+        float forward = Tap(delay_);
+        return forward + reverse * (back - forward);
     }
 
     void Write(float x) {
@@ -469,7 +738,6 @@ class EchoLoop {
     float *buffer_ = nullptr;
     float sample_rate_ = 48000.f, low_pass_ = 0.f, glide_ = 0.f, state_ = 0.f;
     float delay_ = 7200.f, target_ = 7200.f, phase_ = 0.f;
-    bool reverse_ = false;
     int write_ = 0, cleared_ = 0;
 };
 
@@ -500,10 +768,8 @@ git commit -m "Engine: echo loop (tape glide, reverse, stepwise clear)"
 
 - [ ] **Step 1: Add the failing tests**
 
-In `sim/test_engine.cpp` add `#include "tape.h"`, and above `main()`:
+In `sim/test_engine.cpp` add `#include "tape.h"` and, right after the includes (later tests use it too), `static bitch::TapeMemory test_tape; // ~1.1 MB: off the stack`; and above `main()`:
 ```cpp
-static bitch::TapeMemory test_tape; // ~1.1 MB: off the stack
-
 // Capture in the engine: Freeze holds the input (the whole chain, dry included, plays it)
 static void TestEngineCapture() {
     bitch::Engine e;
@@ -638,60 +904,153 @@ static void TestEffectEchoes() {
     n = 0;
     RunFor(plain, p, 1.f, burst, n, pl, pr);
     CHECK(Rms(Window(pl, 0.16f, 0.24f)) < 1e-3f, "no echo pad: repeats anyway (%g)", Rms(Window(pl, 0.16f, 0.24f)));
-    // Ping-pong: the repeats cross sides (the left input's burst repeats on the right)
-    bitch::Engine pp;
-    pp.Init(kSampleRate, 48, nullptr, &test_tape);
-    p.effects = bitch::Bit(bitch::kPingPongEchoes);
-    p.tune_hz = 0.f;
-    float in_l[48], in_r[48], out_l[48], out_r[48];
-    std::vector<float> ppl, ppr;
-    for (int b = 0; b < (int)(0.2f * kSampleRate / 48); b++) {
-        for (int k = 0; k < 48; k++) {
-            in_l[k] = 0.f;
-            in_r[k] = Sine(5000.f, 0.002f, k);
+    // Ping-pong (Linked and Mirror): a burst on the left repeats on the right (shifted down
+    // there), then back on the left (shifted up again). Noise on both inputs first, so both
+    // count as used (mono detection would otherwise copy the left into the right)
+    for (int mode = 0; mode < 2; mode++) {
+        bitch::Engine pp;
+        pp.Init(kSampleRate, 48, nullptr, &test_tape);
+        bitch::Params q;
+        q.tune_hz = 100.f;
+        q.effect_amount = 0.35f;
+        q.stereo_mode = mode ? bitch::StereoMode::kMirror : bitch::StereoMode::kLinked;
+        bitch::Random noise(1u);
+        float in_l[48], in_r[48], out_l[48], out_r[48];
+        for (int b = 0; b < (int)(0.3f * kSampleRate / 48); b++) {
+            if (b == (int)(0.05f * kSampleRate / 48)) q.effects = bitch::Bit(bitch::kPingPongEchoes);
+            for (int k = 0; k < 48; k++)
+                in_l[k] = in_r[k] = b < (int)(0.05f * kSampleRate / 48) ? 0.1f * noise.Bipolar() : 0.f;
+            pp.Process(in_l, in_r, out_l, out_r, 48, q);
         }
-        pp.Process(in_l, in_r, out_l, out_r, 48, p);
-    }
-    for (int b = 0; b < (int)(1.f * kSampleRate / 48); b++) {
-        for (int k = 0; k < 48; k++) {
-            in_l[k] = burst(b * 48 + k);
-            in_r[k] = Sine(5000.f, 0.002f, b * 48 + k); // a faint right input, above -60 dBFS so mono
-                                                        // detection doesn't copy the left into it
+        std::vector<float> ppl, ppr;
+        for (int b = 0; b < (int)(1.f * kSampleRate / 48); b++) {
+            for (int k = 0; k < 48; k++) {
+                in_l[k] = burst(b * 48 + k);
+                in_r[k] = 0.f;
+            }
+            pp.Process(in_l, in_r, out_l, out_r, 48, q);
+            ppl.insert(ppl.end(), out_l, out_l + 48);
+            ppr.insert(ppr.end(), out_r, out_r + 48);
         }
-        pp.Process(in_l, in_r, out_l, out_r, 48, p);
-        ppl.insert(ppl.end(), out_l, out_l + 48);
-        ppr.insert(ppr.end(), out_r, out_r + 48);
+        const char *name = mode ? "Mirror" : "Linked";
+        auto r1 = Window(ppr, 0.16f, 0.24f), l1 = Window(ppl, 0.16f, 0.24f);
+        auto l2 = Window(ppl, 0.31f, 0.39f), r2 = Window(ppr, 0.31f, 0.39f);
+        CHECK(Magnitude(r1, 1000.f) > 3 * Magnitude(r1, 1200.f) && Rms(r1) > 3 * Rms(l1),
+              "ping-pong %s: 1st repeat right 1000 Hz %.4f, 1200 Hz %.4f; right %.4f vs left %.4f", name,
+              Magnitude(r1, 1000.f), Magnitude(r1, 1200.f), Rms(r1), Rms(l1));
+        CHECK(Magnitude(l2, 1100.f) > 3 * Magnitude(l2, 1300.f) && Rms(l2) > 3 * Rms(r2),
+              "ping-pong %s: 2nd repeat left 1100 Hz %.4f, 1300 Hz %.4f; left %.4f vs right %.4f", name,
+              Magnitude(l2, 1100.f), Magnitude(l2, 1300.f), Rms(l2), Rms(r2));
     }
-    CHECK(Rms(Window(ppr, 0.16f, 0.24f)) > 3 * Rms(Window(ppl, 0.16f, 0.24f)),
-          "ping-pong: first repeat right %.4f vs left %.4f", Rms(Window(ppr, 0.16f, 0.24f)),
-          Rms(Window(ppl, 0.16f, 0.24f)));
+}
+
+// Released, the echoes ring out at the feedback setting (no new sound goes in), then stop
+static void TestEffectEchoesRingOut() {
+    bitch::Engine e;
+    e.Init(kSampleRate, 48, nullptr, &test_tape);
+    bitch::Params p;
+    p.feedback = 0.6f;
+    p.effect_amount = 0.35f; // 150 ms
+    p.effects = bitch::Bit(bitch::kEchoes);
+    std::vector<float> l, r;
+    int n = 0;
+    RunFor(e, p, 0.2f, [](int) { return 0.f; }, n, l, r);
+    l.clear();
+    r.clear();
+    const int start = n;
+    auto burst = [start](int k) { return k - start < 2400 ? Sine(500.f, 0.25f, k - start) : 0.f; }; // 50 ms
+    RunFor(e, p, 0.06f, burst, n, l, r);
+    p.effects = 0u; // released before the first repeat
+    RunFor(e, p, 0.94f, burst, n, l, r);
+    float level[4];
+    for (int k = 0; k < 4; k++) level[k] = Rms(Window(l, 0.15f * k + 0.005f, 0.15f * k + 0.045f));
+    for (int k = 1; k < 4; k++)
+        CHECK(fabs(Db(level[k] / (0.6f * level[k - 1]))) < 3.0, "ring out: repeat %d at %.4f after %.4f (want 0.6x)",
+              k, level[k], level[k - 1]);
+    RunFor(e, p, 4.f, [](int) { return 0.f; }, n, l, r);
+    float tail = std::max(Peak(Window(l, 4.5f, 5.f)), Peak(Window(r, 4.5f, 5.f)));
+    CHECK(tail < 1e-4f, "ring out: still sounding after 4 s (%g)", tail);
+}
+
+// Toggling Reverse, Ping-pong, Spiral up, Chirp and Warble while Echoes is held doesn't click
+// (as NoClickWorstRatio, on both sides)
+static float EchoNoClickWorstRatio(uint32_t seed) {
+    const bitch::Effect kToggled[5] = {bitch::kReverseEchoes, bitch::kPingPongEchoes, bitch::kSpiralUp,
+                                       bitch::kChirp, bitch::kWarble};
+    bitch::Engine e;
+    e.Init(kSampleRate, 48, nullptr, &test_tape);
+    bitch::Params p;
+    p.mix = 0.5f;
+    p.tune_hz = 50.f;
+    p.feedback = 0.6f;
+    p.effects = bitch::Bit(bitch::kEchoes);
+    std::vector<float> l, r;
+    int n = 0;
+    auto tone = [](int k) { return Sine(200.f, 0.3f, k); };
+    RunFor(e, p, 0.5f, tone, n, l, r); // the echo running, its repeats built up
+    const size_t base = l.size();
+    const int kToggles = 60;
+    const size_t segment = (size_t)(0.05f * kSampleRate), fade = (size_t)(0.035f * kSampleRate);
+    for (int i = 0; i < kToggles; i++) {
+        seed = seed * 1664525u + 1013904223u;
+        p.effects ^= bitch::Bit(kToggled[(seed >> 16) % 5]);
+        RunFor(e, p, 0.05f, tone, n, l, r);
+    }
+    auto max_step = [&](size_t from, size_t to) {
+        float step = 0.f;
+        for (size_t k = std::max<size_t>(from, 1); k < std::min(to, l.size()); k++)
+            step = std::max(step, std::max(fabsf(l[k] - l[k - 1]), fabsf(r[k] - r[k - 1])));
+        return step;
+    };
+    float worst = 0.f;
+    for (int i = 1; i < kToggles; i++) {
+        size_t at = base + i * segment;
+        float during = max_step(at, at + fade);
+        float steady = std::max(max_step(at - (segment - fade), at), max_step(at + fade, at + segment));
+        if (steady > 0.f) worst = std::max(worst, during / steady);
+    }
+    return worst;
+}
+
+static void TestEffectsEchoNoClick() {
+    float a = EchoNoClickWorstRatio(17u), b = EchoNoClickWorstRatio(4242u);
+    CHECK(a < 2.5f && b < 2.5f, "page 1 pads on/off with Echoes held: a step %.2fx / %.2fx the steady ones", a, b);
 }
 ```
-Call `TestEffectEchoes();` from `main()`.
+Call `TestEffectEchoes();`, `TestEffectEchoesRingOut();` and `TestEffectsEchoNoClick();` from `main()`. In `TestEffectsStable`, pass the tape (`e.Init(kSampleRate, 48, &plate, &test_tape);`) and cycle switch 2 through all three modes, every 2 s: `p.capture = (bitch::CaptureMode)((b / (2 * blocks_per_s)) % 3);` after setting `p.effects`.
 
 - [ ] **Step 2: Run to see it fail**
 
 Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh; echo "exit $?"`
-Expected: FAIL lines from `TestEffectEchoes`; `TestEffectsUnbuiltDoNothing` still passes.
+Expected: FAIL lines from `TestEffectEchoes`, `TestEffectEchoesRingOut` and `TestEffectsEchoNoClick`; `TestEffectsUnbuiltDoNothing` still passes.
 
 - [ ] **Step 3: Wire the echoes in**
+
+`engine/echo_loop.h` is as in Task 2 (`Update(seconds, block_size)`, `Read(reverse)` with the reverse amount 0-1).
 
 `engine/engine.h`: private members after `capture_`:
 ```cpp
     EchoLoop echo_[2];
-    float echo_level_ = 0.f;   // the echo pads' level at the end of the last block (ramped per sample)
+    Shifter echo_shift_[2];    // shifts each repeat again on its way round (apart from the direct sound)
+    float echo_send_ = 0.f;    // how much new sound goes in: the pads' level, glided in from the start
+    float echo_reverse_ = 0.f, echo_ping_pong_ = 0.f; // 0-1, glided; kept while the echo rings out
+    int echo_quiet_ = 0;       // blocks the released echo's return has stayed below 1e-4
     bool echo_running_ = false, echo_clean_ = false; // like the plate: cleared in steps while idle
 ```
 
 `engine/engine.cpp`:
-- In `Init`, with the capture `Init`: `if (tape_) for (int c = 0; c < 2; c++) echo_[c].Init(sample_rate, tape_->echo[c]);`.
-- In `Reset()`: `echo_level_ = 0.f; echo_running_ = false; echo_clean_ = false;`.
-- In `Process()`, after the capture `Set`:
+- In `Init`, with the capture `Init`: `if (tape_) for (int c = 0; c < 2; c++) echo_[c].Init(sample_rate, tape_->echo[c]);` and `for (Shifter &s : echo_shift_) s.Init(sample_rate);`.
+- In `Reset()`: `echo_send_ = echo_reverse_ = echo_ping_pong_ = 0.f; echo_quiet_ = 0; echo_running_ = false; echo_clean_ = false; for (Shifter &s : echo_shift_) s.Reset();`.
+- In `Process()`, after the capture `Set` (`amount_radio` is defined earlier in `Process()`; this code must come after it):
 ```cpp
     // The echo pads (any of the three): the shifter's 2 ms feedback grows into an echo of
-    // 150 ms (amount 0.35) to 900 ms (amount 1), with at least 50% feedback; each repeat goes
-    // through the shifter again. Like the plate, the lines are cleared in steps while idle and
-    // the echo starts only once they're clean (a pad held meanwhile waits up to ~100 ms).
+    // 150 ms (amount 0.35) to 900 ms (amount 1), with at least 50% feedback; each repeat is
+    // shifted again on its way round. The pads' level sends new sound in (the shifter's own 2 ms
+    // feedback crossfading out as it does); released, the repeats ring out at the feedback and
+    // the echo stops once its return has stayed below 1e-4 for 50 ms. Like the plate, the lines
+    // are cleared in steps while idle and the echo starts only once they're clean (a pad held
+    // meanwhile waits up to ~100 ms).
+    const bool echo_pad = Has(fx, kEchoes) || Has(fx, kReverseEchoes) || Has(fx, kPingPongEchoes);
     const float echo_want = fmaxf(fmaxf(level_[kEchoes], level_[kReverseEchoes]), level_[kPingPongEchoes]);
     if (tape_ && !echo_running_ && !echo_clean_) {
         bool a = echo_[0].ClearStep(512), b = echo_[1].ClearStep(512);
@@ -700,31 +1059,60 @@ Expected: FAIL lines from `TestEffectEchoes`; `TestEffectsUnbuiltDoNothing` stil
     const float echo_time = 0.15f + 0.75f * EffectRange(amount_radio);
     if (tape_ && !echo_running_ && echo_clean_ && echo_want > 0.f) {
         echo_running_ = true;
+        echo_send_ = 0.f;
+        echo_quiet_ = 0;
+        echo_reverse_ = Has(fx, kReverseEchoes) ? 1.f : 0.f; // the lines are silent: no need to fade these
+        echo_ping_pong_ = Has(fx, kPingPongEchoes) ? 1.f : 0.f;
         for (EchoLoop &el : echo_) el.SetTimeNow(echo_time);
+        for (Shifter &s : echo_shift_) s.Reset();
     }
-    const float echo_from = echo_running_ ? echo_level_ : 0.f, echo_to = echo_running_ ? echo_want : 0.f;
-    echo_level_ = echo_to;
-    if (echo_running_ && echo_from == 0.f && echo_to == 0.f) {
-        echo_running_ = false;
-        echo_clean_ = false;
+    // The send glides in from 0 when the echo starts (and follows the pads' level)
+    const float send_from = echo_send_;
+    if (echo_running_) {
+        echo_send_ += block_glide_ * (echo_want - echo_send_);
+        if (fabsf(echo_want - echo_send_) < 1e-4f) echo_send_ = echo_want;
     }
-    const bool reversing = Has(fx, kReverseEchoes) || level_[kReverseEchoes] > 0.f;
-    const bool ping_pong = Has(fx, kPingPongEchoes) || level_[kPingPongEchoes] > 0.f;
+    const float send_to = echo_send_;
+    // Reverse and Ping-pong crossfade in and out with their pads (~30 ms) while an echo pad is
+    // held, keep their setting while the echo rings out, and fade out once it has stopped
+    float reverse_target = echo_reverse_, ping_pong_target = echo_ping_pong_;
+    if (echo_pad) {
+        reverse_target = Has(fx, kReverseEchoes) ? 1.f : 0.f;
+        ping_pong_target = Has(fx, kPingPongEchoes) ? 1.f : 0.f;
+    } else if (!echo_running_) {
+        reverse_target = ping_pong_target = 0.f;
+    }
+    const float reverse_from = echo_reverse_, ping_pong_from = echo_ping_pong_;
+    echo_reverse_ += block_glide_ * (reverse_target - echo_reverse_);
+    if (fabsf(reverse_target - echo_reverse_) < 1e-4f) echo_reverse_ = reverse_target;
+    echo_ping_pong_ += block_glide_ * (ping_pong_target - echo_ping_pong_);
+    if (fabsf(ping_pong_target - echo_ping_pong_) < 1e-4f) echo_ping_pong_ = ping_pong_target;
+    const float reverse_to = echo_reverse_, ping_pong_to = echo_ping_pong_;
     if (echo_running_)
-        for (EchoLoop &el : echo_) el.Update(echo_time, reversing, (int)size);
+        for (EchoLoop &el : echo_) el.Update(echo_time, (int)size);
 ```
-  (`amount_radio` is defined earlier in `Process()`; this code must come after it.)
-- In the stereo-mode block, after it computes `gain_target`: `if (ping_pong) gain_target[1] = -gain_target[1]; // ping-pong: the right loop shifts the other way`.
-- In the per-sample loop, before the per-side loop, add:
+- In the stereo-mode block, after it computes `gain_target`:
 ```cpp
-        const float echo = echo_running_ ? echo_from + t * (echo_to - echo_from) : 0.f;
+    // Ping-pong: the right side shifts the other way to the left, in any mode
+    if (echo_ping_pong_ > 0.f) gain_target[1] += echo_ping_pong_ * (-gain_target[0] - gain_target[1]);
+
+```
+  and in its Linked branch, skip the phase lock while ping-pong is on: `if (lock > 0.f && echo_ping_pong_ == 0.f) {`.
+- Before the per-sample loop: `float echo_peak = 0.f; // the echo's return this block`.
+- In the per-sample loop, after `fb` (and `t`) are computed, before the per-side loop (`t` and `fb` are defined after the shift loop, so it can't go any earlier):
+```cpp
+        const float send = echo_running_ ? send_from + t * (send_to - send_from) : 0.f;
         float echo_return[2] = {0.f, 0.f};
         if (echo_running_) {
-            float a = echo_[0].Read(), b = echo_[1].Read();
-            echo_return[0] = ping_pong ? b : a; // ping-pong: each side hears the other's repeats
-            echo_return[1] = ping_pong ? a : b;
+            const float reverse = reverse_from + t * (reverse_to - reverse_from);
+            const float pp = ping_pong_from + t * (ping_pong_to - ping_pong_from);
+            float a = echo_[0].Read(reverse), b = echo_[1].Read(reverse);
+            echo_return[0] = a + pp * (b - a); // ping-pong: each side hears the other's repeats
+            echo_return[1] = b + pp * (a - b);
+            echo_peak = fmaxf(echo_peak, fmaxf(fabsf(a), fabsf(b)));
         }
-        const float echo_feedback = echo * fmaxf(fb, 0.5f);
+        const float echo_feedback = fmaxf(fb, 0.5f);
+        const float own_fb = echo_running_ ? fb * (1.f - send) : fb; // the 2 ms feedback, out while sending
 ```
 - In the per-side loop, change
 ```cpp
@@ -732,17 +1120,33 @@ Expected: FAIL lines from `TestEffectEchoes`; `TestEffectsUnbuiltDoNothing` stil
 ```
   to
 ```cpp
-            float shifted = echo_running_
-                                ? shifter_[c].Process(ringed + echo_feedback * echo_return[c], shift[c] + drift_hz_[c],
-                                                      fb * (1.f - echo))
-                                : shifter_[c].Process(ringed, shift[c] + drift_hz_[c], fb);
-            if (echo_running_) echo_[c].Write(shifted);
+            float shifted = shifter_[c].Process(ringed, shift[c] + drift_hz_[c], own_fb);
+            if (echo_running_) {
+                // The repeat, shifted again; the line takes it and the new sound (at the send)
+                float repeat = echo_feedback * echo_shift_[c].Process(echo_return[c], shift[c] + drift_hz_[c], 0.f);
+                echo_[c].Write(send * shifted + repeat);
+                shifted += repeat;
+            }
+```
+  (With the echo idle, `own_fb` is `fb`: the call is unchanged.)
+- After the per-sample loop (after `pitch_.Work();`):
+```cpp
+    // A released echo stops once its return has stayed below 1e-4 for 50 ms (its lines are then
+    // cleared in steps); touching a pad again before then just carries on
+    if (echo_running_) {
+        if (echo_pad || echo_send_ > 0.f || echo_peak >= 1e-4f) {
+            echo_quiet_ = 0;
+        } else if (++echo_quiet_ >= (int)(0.05f * sample_rate_ / (float)size)) {
+            echo_running_ = false;
+            echo_clean_ = false;
+        }
+    }
 ```
 
 - [ ] **Step 4: Run the tests**
 
 Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh; echo "exit $?"`
-Expected: `All tests passed`, exit 0, including the bit-exact test (with the pads off, `echo_running_` stays false and the shifter call is unchanged).
+Expected: `All tests passed`, exit 0, including the bit-exact test (with the pads off, `echo_running_` stays false, `echo_ping_pong_` stays 0 and the shifter call is unchanged).
 
 - [ ] **Step 5: Commit**
 
@@ -830,34 +1234,42 @@ Expected: FAIL lines from the three tests.
     // Motion pads (page 1)
     Shifter spiral_[2];          // the spiral's second voice, per side
     float spiral_phase_ = 0.f;   // 0-1 around the spiral's cycle
-    float spiral_dir_ = 1.f;     // +1 up, -1 down (the last spiral pad touched)
+    float spiral_dir_ = 1.f;     // +1 up, -1 down, glided towards spiral_dir_target_
+    float spiral_dir_target_ = 1.f; // the last spiral pad touched
     float spiral_level_ = 0.f;   // at the end of the last block (ramped per sample)
     bool spiral_running_ = false;
     float chirp_envelope_ = 0.f, chirp_attack_ = 0.f, chirp_release_ = 0.f;
+    float chirp_depth_ = 0.f; // the last block's depth (ramped)
+    float block_rate_ = 1000.f;
     float warble_phase_ = 0.f, warble_hz_ = 0.f; // warble_hz_: the last block's value (ramped)
     Wander warble_wander_;
     bool spiral_up_was_ = false, spiral_down_was_ = false;
 ```
 
 `engine/engine.cpp`:
-- In `Init`: `for (Shifter &s : spiral_) s.Init(sample_rate); chirp_attack_ = 1.f - expf(-1.f / (0.002f * sample_rate)); chirp_release_ = 1.f - expf(-1.f / (0.15f * sample_rate)); warble_wander_.Init(block_rate, 53u);`.
-- In `Reset()`: `for (Shifter &s : spiral_) s.Reset(); spiral_phase_ = 0.f; spiral_level_ = 0.f; spiral_running_ = false; chirp_envelope_ = 0.f; warble_phase_ = 0.f; warble_hz_ = 0.f; spiral_up_was_ = spiral_down_was_ = false;`.
+- In `Init`: `block_rate_ = block_rate;` (before `Reset()`), `for (Shifter &s : spiral_) s.Init(sample_rate); chirp_attack_ = 1.f - expf(-1.f / (0.002f * sample_rate)); chirp_release_ = 1.f - expf(-1.f / (0.15f * sample_rate));`.
+- In `Reset()`: `for (Shifter &s : spiral_) s.Reset(); spiral_phase_ = 0.f; spiral_level_ = 0.f; spiral_dir_ = spiral_dir_target_ = 1.f; spiral_running_ = false; chirp_envelope_ = 0.f; chirp_depth_ = 0.f; warble_phase_ = 0.f; warble_hz_ = 0.f; warble_wander_.Init(block_rate_, 53u); spiral_up_was_ = spiral_down_was_ = false;` (re-seeding the warble's wander, so a reset starts it afresh).
 - In `Process()`, after the echo per-block code:
 ```cpp
     // Spiral: two voices (the main shifter and spiral_[c]) whose extra shifts ramp 0 -> 300 Hz
-    // (down: 0 -> -300 Hz) half a cycle apart, each weighted sin^2 of its ramp's phase, so each
-    // ramp restarts silently: an endless rise (or fall). 0.05 (amount 0.35) to 0.5 cycles/s.
+    // (down: 0 -> -300 Hz) half a cycle apart, weighted |sin| and |cos| of the ramp's phase
+    // (equal power: the voices are unrelated), so each ramp restarts silently: an endless rise
+    // (or fall). 0.05 (amount 0.35) to 0.5 cycles/s.
     // The last spiral pad touched sets the direction.
     const bool up = Has(fx, kSpiralUp), down = Has(fx, kSpiralDown);
-    if (up && !spiral_up_was_) spiral_dir_ = 1.f;
-    if (down && !spiral_down_was_) spiral_dir_ = -1.f;
+    if (up && !spiral_up_was_) spiral_dir_target_ = 1.f;
+    if (down && !spiral_down_was_) spiral_dir_target_ = -1.f;
     spiral_up_was_ = up;
     spiral_down_was_ = down;
     const float spiral_want = fmaxf(level_[kSpiralUp], level_[kSpiralDown]);
     if (spiral_want > 0.f && !spiral_running_) {
         for (Shifter &s : spiral_) s.Reset();
         spiral_running_ = true;
+        spiral_dir_ = spiral_dir_target_;
     }
+    // A change of direction while it runs glides (~30 ms) through no spiral shift
+    spiral_dir_ += block_glide_ * (spiral_dir_target_ - spiral_dir_);
+    if (fabsf(spiral_dir_target_ - spiral_dir_) < 1e-4f) spiral_dir_ = spiral_dir_target_;
     const float spiral_from = spiral_running_ ? spiral_level_ : 0.f, spiral_to = spiral_running_ ? spiral_want : 0.f;
     spiral_level_ = spiral_to;
     if (spiral_running_ && spiral_from == 0.f && spiral_to == 0.f) spiral_running_ = false;
@@ -869,9 +1281,8 @@ Expected: FAIL lines from the three tests.
         pb -= floorf(pb);
         spiral_a = spiral_dir_ * 300.f * spiral_phase_;
         spiral_b = spiral_dir_ * 300.f * pb;
-        float sa = sinf(3.14159265359f * spiral_phase_), sb = sinf(3.14159265359f * pb);
-        weight_a = sa * sa;
-        weight_b = sb * sb;
+        weight_a = sinf(3.14159265359f * spiral_phase_); // >= 0: the phase is 0-1
+        weight_b = fabsf(cosf(3.14159265359f * spiral_phase_));
     }
     // Warble: a sine LFO plus a little randomness, 0.5-8 Hz, 20-400 Hz deep (both rising with
     // the amount); ramped across the block
@@ -887,18 +1298,22 @@ Expected: FAIL lines from the three tests.
         warble_hz_ = 0.f;
     }
     const float warble_to = warble_hz_;
-    // Chirp: up to +300 Hz (amount 0.35) to +1500 Hz (amount 1) at full input level
-    const float chirp_level = level_[kChirp];
-    const float chirp_depth = chirp_level * (300.f + 1200.f * EffectRange(amount_radio));
+    // Chirp: up to +300 Hz (amount 0.35) to +1500 Hz (amount 1) at full input level; the depth
+    // is ramped across the block
+    const float chirp_from = chirp_depth_;
+    chirp_depth_ = level_[kChirp] * (300.f + 1200.f * EffectRange(amount_radio));
+    const float chirp_to = chirp_depth_;
+
 ```
-- In the per-sample loop, after `float x[2] = ...; if (tape_) capture_.Process(...)`, add the chirp's envelope (on the captured input):
+- In the per-sample loop, after `float x[2] = ...; if (tape_) capture_.Process(...)`, add the chirp's envelope (on the captured input) and the warble (`inv_size` is declared before the loop):
 ```cpp
         float motion = 0.f; // Chirp + Warble, added to the shift before the stereo gains
-        if (chirp_level > 0.f || chirp_envelope_ > 0.f) {
+        if (chirp_from > 0.f || chirp_to > 0.f || chirp_envelope_ > 0.f) {
             float level = fmaxf(fabsf(x[0]), fabsf(x[1]));
             chirp_envelope_ += (level > chirp_envelope_ ? chirp_attack_ : chirp_release_) * (level - chirp_envelope_);
-            if (chirp_level == 0.f && chirp_envelope_ < 1e-5f) chirp_envelope_ = 0.f;
-            motion += chirp_depth * fminf(chirp_envelope_ / 0.5f, 1.f);
+            if (chirp_to == 0.f && chirp_envelope_ < 1e-5f) chirp_envelope_ = 0.f;
+            float depth = chirp_from + (float)(i + 1) * inv_size * (chirp_to - chirp_from);
+            motion += depth * fminf(chirp_envelope_ / 0.5f, 1.f);
         }
         if (warble_from != 0.f || warble_to != 0.f) motion += warble_from + (float)(i + 1) * inv_size * (warble_to - warble_from);
 ```
@@ -910,24 +1325,21 @@ Expected: FAIL lines from the three tests.
 ```cpp
             shift[c] = (motion != 0.f ? shift_hz_ + motion : shift_hz_) * side_gain_[c];
 ```
-  (keeping the no-motion arithmetic exactly as before). `inv_size` already exists in `Process()`; if the declaration order puts it after this point, move the motion code below it.
-- In the per-side loop, replace the shifter call's result with the spiral pair when it runs. After the echo change from Task 4, the call is the `float shifted = ...;` statement; wrap it:
+  (keeping the no-motion arithmetic exactly as before).
+- In the per-side loop, the spiral pair replaces the main shifter while it runs:
 ```cpp
             float shifted;
             if (!spiral_running_) {
-                shifted = /* the Task 4 expression, unchanged */;
+                shifted = shifter_[c].Process(ringed, shift[c] + drift_hz_[c], own_fb);
             } else {
                 const float spiral = spiral_from + t * (spiral_to - spiral_from);
-                float in = echo_running_ ? ringed + echo_feedback * echo_return[c] : ringed;
-                float own_fb = echo_running_ ? fb * (1.f - echo) : fb;
                 float side = side_gain_[c];
-                float a = shifter_[c].Process(in, shift[c] + drift_hz_[c] + spiral * spiral_a * side, own_fb);
-                float b = spiral_[c].Process(in, shift[c] + drift_hz_[c] + spiral * spiral_b * side, own_fb);
+                float a = shifter_[c].Process(ringed, shift[c] + drift_hz_[c] + spiral * spiral_a * side, own_fb);
+                float b = spiral_[c].Process(ringed, shift[c] + drift_hz_[c] + spiral * spiral_b * side, own_fb);
                 shifted = a * (1.f - spiral + spiral * weight_a) + b * spiral * weight_b;
             }
-            if (echo_running_) echo_[c].Write(shifted);
 ```
-  (Write the Task 4 expression out in full in the first branch; don't leave the comment.)
+  followed by the echo's `if (echo_running_) { ... }` from Task 4 (the repeats are shifted by `echo_shift_` alone, without the spiral).
 
 - [ ] **Step 4: Run the tests**
 
@@ -936,7 +1348,7 @@ Expected: `All tests passed`, exit 0, including the bit-exact test (only Chaos i
 
 - [ ] **Step 5: Build and commit**
 
-Run: `make -C ~/local_files/daisy/bit-chifter` (touch `engine/engine.cpp` first) — expected: no errors or warnings; report the DTCMRAM/SRAM lines (the engine grows only by the two extra shifters, ~1 KB).
+Run: `make -C ~/local_files/daisy/bit-chifter` (touch `engine/engine.cpp` first) — expected: no errors or warnings; report the DTCMRAM/SRAM lines (`make clean` first: the makefile doesn't track headers). The engine grows by four shifters (spiral and repeats) and the freeze's search buffer, ~2.8 KB.
 ```bash
 cd ~/local_files/daisy/bit-chifter
 git add engine/engine.h engine/engine.cpp sim/test_engine.cpp
