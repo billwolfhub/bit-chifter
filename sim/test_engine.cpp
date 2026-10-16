@@ -27,6 +27,7 @@
 #include "morse_chimes.h"
 #include "selcall.h"
 #include "jammer.h"
+#include "codec_warble.h"
 #include "stutter.h"
 #include "dropouts.h"
 #include "crush.h"
@@ -2599,6 +2600,51 @@ static void TestStutter() {
     CHECK(live_at_start, "stutter: repeated before it had a whole fragment");
 }
 
+static std::vector<float> RunCodec(bitch::CodecWarble &c, float amount, float seconds, float hz) {
+    std::vector<float> out;
+    for (int b = 0; b < (int)(seconds * kSampleRate / 48); b++) {
+        c.Update(amount, 48);
+        for (int k = 0; k < 48; k++) {
+            float l = Sine(hz, 0.25f, b * 48 + k), r = l;
+            c.Process(l, r);
+            out.push_back(l);
+        }
+    }
+    return out;
+}
+
+static void TestCodecWarble() {
+    bitch::CodecWarble c;
+    c.Init(kSampleRate, 13u);
+    // In band: through, at a lower and wobbling level
+    auto x = RunCodec(c, 1.f, 2.f, 1000.f);
+    float level = Db(Rms(Window(x, 0.5f, 2.f)) / (0.25f / sqrtf(2.f)));
+    CHECK(level > -15.f && level < 3.f, "codec warble: 1 kHz at %.1f dB", level);
+    float mean = 0.f, var = 0.f;
+    std::vector<float> w;
+    for (float t = 0.5f; t + 0.01f <= 2.f; t += 0.01f) w.push_back(Rms(Window(x, t, t + 0.01f)));
+    for (float v : w) mean += v / (float)w.size();
+    for (float v : w) var += (v - mean) * (v - mean) / (float)w.size();
+    CHECK(sqrtf(var) > 0.15f * mean, "codec warble: level hardly moves (%.4f +- %.4f)", mean, sqrtf(var));
+    // Nothing above ~4 kHz
+    c.Init(kSampleRate, 13u);
+    auto high = RunCodec(c, 0.35f, 1.f, 7000.f);
+    float top = Db(Rms(Window(high, 0.5f, 1.f)) / (0.25f / sqrtf(2.f)));
+    CHECK(top < -20.f, "codec warble: 7 kHz only %.1f dB down", top);
+    // Both sides share the band levels
+    c.Init(kSampleRate, 13u);
+    bool same = true;
+    for (int b = 0; b < 200; b++) {
+        c.Update(1.f, 48);
+        for (int k = 0; k < 48; k++) {
+            float l = Sine(800.f, 0.25f, b * 48 + k), r = l;
+            c.Process(l, r);
+            same = same && l == r;
+        }
+    }
+    CHECK(same, "codec warble: the sides differ");
+}
+
 int main() {
     TestSoftQuantize();
     TestSoftClip();
@@ -2692,9 +2738,10 @@ int main() {
     TestEffectCarriersFollowDial();
     TestRadioZeroBeat();
     TestEffectsRadioNoClick();
-    if (failures == 0) printf("All tests passed\n");
     TestCrush();
     TestDropouts();
     TestStutter();
+    TestCodecWarble();
+    if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }

@@ -501,7 +501,8 @@ Expected: compile error, `'codec_warble.h' file not found`.
 namespace bitch {
 
 // Codec warble: the watery sound of a low-bitrate stream. An 8-band filter bank (band-passes from
-// 150 Hz to 3.5 kHz, about 0.65 octave apart, so nothing much above ~4 kHz gets through) whose
+// 150 Hz to 3.5 kHz, about 0.65 octave apart, then a 4th-order Butterworth low-pass at 4 kHz for
+// the top cut) whose
 // bands are each re-levelled at random every 25-66 ms (15-40 times a second): to between
 // 1 - depth and 1, or now and then gated almost off. Depth 0.5 (amount 0.35) to 1 (amount 1);
 // the gating rises with the amount (10% to 35% of the changes). Level changes glide over 2 ms.
@@ -519,10 +520,17 @@ class CodecWarble {
             float g = tanf(3.14159265359f * hz / sample_rate);
             for (Bandpass &b : band_[k]) b.SetCoefficients(g, 1.f / 2.2f);
         }
+        float g = tanf(3.14159265359f * 4000.f / sample_rate);
+        for (int side = 0; side < 2; side++) {
+            top_[side][0].Set(g, 1.8478f); // 4th-order Butterworth: two stages, k = 1/Q
+            top_[side][1].Set(g, 0.7654f);
+        }
         Reset();
     }
 
     void Reset() {
+        for (auto &side : top_)
+            for (LowPass &s : side) s.Reset();
         for (int k = 0; k < kBands; k++) {
             for (Bandpass &b : band_[k]) b.Reset();
             gain_[k] = target_[k] = 1.f;
@@ -548,11 +556,32 @@ class CodecWarble {
             out_l += gain_[k] * band_[k][0].Process(l);
             out_r += gain_[k] * band_[k][1].Process(r);
         }
-        l = 0.6f * out_l; // the 8 unity-peak bands overlap: their sum is a little above unity
-        r = 0.6f * out_r;
+        // the 8 unity-peak bands overlap: their sum is a little above unity
+        l = 0.6f * top_[0][1].Process(top_[0][0].Process(out_l));
+        r = 0.6f * top_[1][1].Process(top_[1][0].Process(out_r));
     }
 
   private:
+    // One low-pass stage: Andrew Simper's state-variable filter (g = tan(pi fc / fs), k = 1 / Q)
+    struct LowPass {
+        float a1 = 0.f, a2 = 0.f, a3 = 0.f, ic1 = 0.f, ic2 = 0.f;
+        void Set(float g, float k) {
+            a1 = 1.f / (1.f + g * (g + k));
+            a2 = g * a1;
+            a3 = g * a2;
+        }
+        void Reset() { ic1 = ic2 = 0.f; }
+        float Process(float x) {
+            float v3 = x - ic2;
+            float v1 = a1 * ic1 + a2 * v3;
+            float v2 = ic2 + a2 * ic1 + a3 * v3;
+            ic1 = 2.f * v1 - ic1;
+            ic2 = 2.f * v2 - ic2;
+            return v2;
+        }
+    };
+
+    LowPass top_[2][2];
     Bandpass band_[kBands][2];
     float gain_[kBands] = {}, target_[kBands] = {};
     int left_[kBands] = {};
