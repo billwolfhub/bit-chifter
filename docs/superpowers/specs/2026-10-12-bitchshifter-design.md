@@ -42,9 +42,9 @@ envelope follower). Local project only (`~/local_files/daisy/bit-chifter`).
 
 ### Switches and pads
 Designed in `2026-10-13-bit-chifter-strange-pages-design.md`: switch 1 picks one of three
-pages of 10 pad effects (Shift & time, Radio, Digital & damage; tap latches, hold is
-momentary), switch 2 is the capture mode (Normal / Freeze / Loop), holding TOU clears all
-effects. The earlier Stations / Keyboard / Performance design is deferred (it is in git
+pages of 10 pad effects (Shift & time, Radio, Digital & damage; each on while its pad is
+held), switch 2 is the capture mode (Normal / Freeze / Loop), a TOU tap steps the stereo
+mode. The earlier Stations / Keyboard / Performance design is deferred (it is in git
 history, before 2026-10-13's strange pages commit).
 
 ## Signal chain (per sample, 48 kHz, block 48)
@@ -111,7 +111,7 @@ in doesn't click). **Movement between the sides** comes from:
    signal), and the decay lengthens with it, ~1.2 s → ~3 s. Exact pass-through at amount 0
    (while idle, the reverb's state is cleared in small steps in the background, ~40 ms, and it
    only restarts once clean, so turning it up never replays old sound).
-   Buffers (~145 KB) in SDRAM (the engine stays in DTCM); CPU budget ~3–6%.
+   Buffers (~145 KB) in SDRAM (the engine stays in DTCM); CPU budget ~3–6% (the whole firmware measured ~31% average, 58% at most with many pads held).
 8. **Soft limiter** on the outputs.
 
 ## Code structure
@@ -123,7 +123,7 @@ bit-chifter/
   simple_touch.cpp   Simple Touch front end: knobs, faders, switches, pads (via ui/pad_pages.h)
                      → engine parameters; audio callback
   sim/               Mac harness: runs the engine on a WAV or test tones, writes a WAV
-  hwtest/            step 1 hardware test firmware
+  tools/             hardware diagnostics (hwtest, padtest, leveltest)
   Makefile           libDaisy/DaisySP one level up, APP_TYPE = BOOT_SRAM
 ```
 

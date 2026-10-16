@@ -1,17 +1,12 @@
-// bit-chifter for the Synthux Simple Touch: ring mod, shifter, radio filter, stereo.
-// Fader 1 TUNE (the SSB dial: fine +-400 Hz around 0 at the centre, swoop zones to +-2 kHz at the
-// ends, glides like a heavy dial, harmonic detents), fader 2 RECEPTION (clean to lost in the noise), knob 1 RING, knob 2 CARRIER, knob 3 FILTER,
-// knob 4 WIDTH, knob 5 FEEDBACK, knob 6 MIX (its last 15% adds reverb). Switch 1 picks the page of pad
-// effects (Shift & time / Radio / Digital & damage): a pad's effect is on while it's held, and
-// RECEPTION also sets how strong they are. Built so far: feedback burst, dial spins, static burst,
-// squelch, signal fade-out, filter slam, ring 100%, carrier x2, kill dry, hold drift; and the radio
-// pads: scrambler, hopping scrambler, passing carriers, selcall, Morse chimes, jammer; and the damage
-// pads: bitcrush, sample-rate crush, dropouts, stutter, codec warble, and chaos (2-3 random effects
-// while held); page 1: echoes (shifted, reverse, ping-pong), spiral up/down, chirp, warble. Switch 2
-// (right switch): Normal / Freeze / Loop.
-// The "TOU" logo pad: a tap steps the stereo mode (Linked / Mirror / Rotate, with 1/2/3 confirmation
-// blips). The CPU load and the
-// controls are printed over USB serial once a second.
+// bit-chifter for the Synthux Simple Touch (Daisy Seed): a frequency shifter / ring mod voiced as
+// a shortwave sideband receiver. This file is the front end: it reads the faders, knobs, switches
+// and touch pads, turns them into engine parameters (engine/, hardware-free), runs the audio, and
+// prints a status report over USB serial once a second. See README.md for the controls.
+//   Faders: 1 TUNE (the sideband dial), 2 RECEPTION (clear to lost in the noise; also the pad
+//   effects' amount). Knobs: 1 RING, 2 CARRIER, 3 FILTER, 4 WIDTH, 5 FEEDBACK, 6 MIX (its last 15%
+//   adds reverb). Switch 1: the pad page (Shift & time / Radio / Digital & damage); each pad's
+//   effect is on while held (ui/pad_pages.h). Switch 2: capture (Normal / Freeze / Loop). "TOU"
+//   logo pad: a tap steps the stereo mode (Linked / Mirror / Rotate, 1/2/3 confirmation blips).
 #include "daisy_seed.h"
 #include "engine.h"
 #include "mapping.h"
@@ -25,7 +20,7 @@
 
 using namespace daisy;
 
-// Control map, from hwtest/ and padtest/ (see README.md). None of the analog
+// Control map, measured with tools/hwtest and tools/padtest (see README.md). None of the analog
 // controls read reversed.
 const int kInputTune = 6;     // fader 1
 const int kInputRing = 1;     // knob 1
