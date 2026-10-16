@@ -27,6 +27,7 @@
 #include "morse_chimes.h"
 #include "selcall.h"
 #include "jammer.h"
+#include "dropouts.h"
 #include "crush.h"
 #include <algorithm>
 #include <cstdint>
@@ -2524,6 +2525,41 @@ static void TestCrush() {
     CHECK(fabsf(rc.HoldRateHz() - 12000.f) < 1.f, "rate crush at 0.35: %.0f Hz", rc.HoldRateHz());
 }
 
+// Runs the dropouts gate for `seconds`: the number of gaps, the fraction of time fully gone, and
+// the largest step of the gain between samples
+static void RunDropouts(float amount, float seconds, int &gaps, float &gone, float &step) {
+    bitch::Dropouts d;
+    d.Init(kSampleRate, 19u);
+    gaps = 0;
+    gone = 0.f;
+    step = 0.f;
+    float prev = 1.f;
+    int total = 0;
+    for (int b = 0; b < (int)(seconds * kSampleRate / 48); b++) {
+        d.Update(amount);
+        for (int k = 0; k < 48; k++) {
+            float g = d.Gain();
+            gaps += prev >= 0.5f && g < 0.5f;
+            gone += g == 0.f;
+            step = std::max(step, fabsf(g - prev));
+            prev = g;
+            total++;
+        }
+    }
+    gone /= (float)total;
+}
+
+static void TestDropouts() {
+    int gaps;
+    float gone, step;
+    RunDropouts(1.f, 10.f, gaps, gone, step);
+    CHECK(gaps >= 20 && gaps <= 60, "dropouts at 1: %d gaps in 10 s (want ~40)", gaps);
+    CHECK(gone > 0.2f && gone < 0.65f, "dropouts at 1: gone %.0f%% of the time", 100.f * gone);
+    CHECK(step <= 1.f / 48.f + 1e-6f, "dropouts: gain steps by %.4f (1 ms edges: 1/48 at most)", step);
+    RunDropouts(0.35f, 20.f, gaps, gone, step);
+    CHECK(gaps >= 2 && gaps <= 12, "dropouts at 0.35: %d gaps in 20 s (want ~6)", gaps);
+}
+
 int main() {
     TestSoftQuantize();
     TestSoftClip();
@@ -2619,5 +2655,6 @@ int main() {
     TestEffectsRadioNoClick();
     if (failures == 0) printf("All tests passed\n");
     TestCrush();
+    TestDropouts();
     return failures == 0 ? 0 : 1;
 }
