@@ -2,7 +2,8 @@
 // Usage: render in.wav out.wav [tune=Hz] [fb=0-0.95] [mix=0-1] [ring=0-1] [carrier=Hz]
 //                              [filter=Hz] [q=0.7-12] [open=0-1] [reception=0-1]
 //                              [detent=0-0.95] [inertia=s] [reverb=0-1] [sweep=Hz] [stereo=linked|mirror|rotate]
-//                              [amount=0.35-1] [effects=name,name] [every=s]
+//                              [amount=0.35-1] [effects=name,name] [every=s] [freeze_at=s] [loop_at=s]
+// freeze_at=s / loop_at=s switch capture (switch 2) to Freeze / Loop from that second on; whichever time passed most recently wins.
 // effects= turns on pad effects by name (effects.h); every=s toggles them on for s seconds, off for s, ...
 // sweep=Hz ramps the tune linearly from tune= (at the start) to sweep= (at the end of the file).
 // (defaults are the engine's: no shift, no ring mod, filter open, linked)
@@ -49,13 +50,14 @@ int main(int argc, char **argv) {
     if (argc < 3) {
         fprintf(stderr,
                 "Usage: %s in.wav out.wav [tune=] [fb=] [mix=] [ring=] [carrier=] [filter=] [q=] [open=] "
-                "[reception=] [detent=] [inertia=] [reverb=0-1] [sweep=Hz] [stereo=linked|mirror|rotate] [amount=0.35-1] [effects=name,name] [every=s]\n",
+                "[reception=] [detent=] [inertia=] [reverb=0-1] [sweep=Hz] [stereo=linked|mirror|rotate] [amount=0.35-1] [effects=name,name] [every=s] [freeze_at=s] [loop_at=s]\n",
                 argv[0]);
         return 1;
     }
     bitch::Params p;
     float sweep_to = NAN;
     float every = 0.f; // seconds; 0 = effects on all the time
+    float freeze_at = NAN, loop_at = NAN; // seconds; NAN = never
     for (int i = 3; i < argc; i++) {
         if (strncmp(argv[i], "effects=", 8) == 0) {
             // A comma-separated list of effect names (effects.h), e.g. effects=squelch,spin_up
@@ -77,6 +79,14 @@ int main(int argc, char **argv) {
             every = (float)atof(argv[i] + 6); // effects on for `every` seconds, off for `every`, ...
             continue;
         }
+        if (strncmp(argv[i], "freeze_at=", 10) == 0) {
+            freeze_at = (float)atof(argv[i] + 10);
+            continue;
+        }
+        if (strncmp(argv[i], "loop_at=", 8) == 0) {
+            loop_at = (float)atof(argv[i] + 8);
+            continue;
+        }
         if (!SetOption(p, sweep_to, argv[i])) {
             fprintf(stderr, "Unknown option %s\n", argv[i]);
             return 1;
@@ -88,8 +98,9 @@ int main(int argc, char **argv) {
         return 1;
     }
     static bitch::PlateReverb plate; // large: keep it off the stack
+    static bitch::TapeMemory tape;   // ~1.1 MB: likewise
     static bitch::Engine engine;
-    engine.Init((float)in.sample_rate, 48, &plate);
+    engine.Init((float)in.sample_rate, 48, &plate, &tape);
     Wav out;
     out.sample_rate = in.sample_rate;
     out.left.resize(in.left.size());
@@ -103,6 +114,11 @@ int main(int argc, char **argv) {
             float t = (float)i / (float)in.sample_rate;
             p.effects = fmodf(t, 2.f * every) < every ? effects_on : 0u;
         }
+        float now = (float)i / (float)in.sample_rate;
+        bool frozen = !std::isnan(freeze_at) && now >= freeze_at;
+        bool looped = !std::isnan(loop_at) && now >= loop_at;
+        if (frozen && looped) frozen = freeze_at > loop_at; // the most recent wins
+        p.capture = frozen ? bitch::CaptureMode::kFreeze : looped ? bitch::CaptureMode::kLoop : bitch::CaptureMode::kNormal;
         engine.Process(&in.left[i], &in.right[i], &out.left[i], &out.right[i], block, p);
     }
     p.tune_hz = tune_from;
@@ -120,6 +136,7 @@ int main(int argc, char **argv) {
            p.tune_hz, p.feedback, p.mix, p.ring, p.carrier_hz, p.filter_hz, p.filter_q, p.filter_open, p.reception,
            p.detent, p.dial_inertia_s, p.reverb, p.effect_amount, names);
     if (!std::isnan(sweep_to)) printf(" sweep %g", sweep_to);
+    if (!std::isnan(freeze_at) || !std::isnan(loop_at)) printf(" capture freeze@%g loop@%g", freeze_at, loop_at);
     printf(" stereo %s)\n", modes[(int)p.stereo_mode]);
     return 0;
 }
