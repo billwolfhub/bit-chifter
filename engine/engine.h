@@ -163,6 +163,9 @@ class Engine {
     // Switch 2 and the echoes, using the front end's tape memory (if any)
     TapeMemory *tape_ = nullptr;
     CaptureLoop capture_;
+    EchoLoop echo_[2];
+    float echo_level_ = 0.f;   // the echo pads' level at the end of the last block (ramped per sample)
+    bool echo_running_ = false, echo_clean_ = false; // like the plate: cleared in steps while idle
 };
 
 } // namespace bitch

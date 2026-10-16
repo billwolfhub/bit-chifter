@@ -58,6 +58,8 @@ void Engine::Init(float sample_rate, size_t block_size, PlateReverb *plate, Tape
     stutter_.Init(sample_rate, 17u);
     dropouts_.Init(sample_rate, 19u);
     if (tape_) capture_.Init(sample_rate, tape_->capture[0], tape_->capture[1]);
+    if (tape_)
+        for (int c = 0; c < 2; c++) echo_[c].Init(sample_rate, tape_->echo[c]);
     hand_.Init(block_rate, 47u);
     pitch_.Init(sample_rate);
     squelch_attack_ = 1.f / (0.002f * sample_rate);
@@ -128,6 +130,9 @@ void Engine::Reset() {
     dropouts_.Reset();
     for (float &v : damage_level_) v = 0.f;
     if (tape_) capture_.Reset();
+    echo_level_ = 0.f;
+    echo_running_ = false;
+    echo_clean_ = false;
 }
 
 void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *out_r, size_t size,
@@ -309,6 +314,30 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
     if (damaging[3]) stutter_.Update(amount_radio, (float)size / sample_rate_);
     if (damaging[4]) dropouts_.Update(amount_radio);
     if (tape_) capture_.Set(params.capture);
+    // The echo pads (any of the three): the shifter's 2 ms feedback grows into an echo of
+    // 150 ms (amount 0.35) to 900 ms (amount 1), with at least 50% feedback; each repeat goes
+    // through the shifter again. Like the plate, the lines are cleared in steps while idle and
+    // the echo starts only once they're clean (a pad held meanwhile waits up to ~100 ms).
+    const float echo_want = fmaxf(fmaxf(level_[kEchoes], level_[kReverseEchoes]), level_[kPingPongEchoes]);
+    if (tape_ && !echo_running_ && !echo_clean_) {
+        bool a = echo_[0].ClearStep(512), b = echo_[1].ClearStep(512);
+        echo_clean_ = a && b;
+    }
+    const float echo_time = 0.15f + 0.75f * EffectRange(amount_radio);
+    if (tape_ && !echo_running_ && echo_clean_ && echo_want > 0.f) {
+        echo_running_ = true;
+        for (EchoLoop &el : echo_) el.SetTimeNow(echo_time);
+    }
+    const float echo_from = echo_running_ ? echo_level_ : 0.f, echo_to = echo_running_ ? echo_want : 0.f;
+    echo_level_ = echo_to;
+    if (echo_running_ && echo_from == 0.f && echo_to == 0.f) {
+        echo_running_ = false;
+        echo_clean_ = false;
+    }
+    const bool reversing = Has(fx, kReverseEchoes) || level_[kReverseEchoes] > 0.f;
+    const bool ping_pong = Has(fx, kPingPongEchoes) || level_[kPingPongEchoes] > 0.f;
+    if (echo_running_)
+        for (EchoLoop &el : echo_) el.Update(echo_time, reversing, (int)size);
 
     // The plate: idle (and skipped) at 0 or without a plate. While idle it is cleared in steps
     // (1024 floats a block, ~40 ms for all of it), and it starts again only once clean, so an
@@ -354,6 +383,7 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
             shifter_[1].NudgePhase(fabsf(err) < 1e-5f ? err : lock * err);
         }
     }
+    if (ping_pong) gain_target[1] = -gain_target[1]; // ping-pong: the right loop shifts the other way
 
     for (size_t i = 0; i < size; i++) {
         float x[2] = {in_l[i], in_r[i]};
@@ -391,6 +421,14 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
         float call = calling ? (selcall_from + t * (selcall_to - selcall_from)) * selcall_.Process() : 0.f;
         float jam = level_jammer > 0.f ? jammer_.Process() : 0.f;
         const float scramble = scramble_from + t * (scramble_to - scramble_from);
+        const float echo = echo_running_ ? echo_from + t * (echo_to - echo_from) : 0.f;
+        float echo_return[2] = {0.f, 0.f};
+        if (echo_running_) {
+            float a = echo_[0].Read(), b = echo_[1].Read();
+            echo_return[0] = ping_pong ? b : a; // ping-pong: each side hears the other's repeats
+            echo_return[1] = ping_pong ? a : b;
+        }
+        const float echo_feedback = echo * fmaxf(fb, 0.5f);
         float y[2], dry[2], filtered[2];
         for (int c = 0; c < 2; c++) {
             take_other_[c] += take_glide_ * (take_target[c] - take_other_[c]);
@@ -398,7 +436,11 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
             float driven = drive_.Process(dry[c]);
             if (scrambling) driven += scramble * (scrambler_[c].Process(driven) - driven);
             float ringed = ring_[c].Process(driven, carrier_hz_, ring_amount_);
-            float shifted = shifter_[c].Process(ringed, shift[c] + drift_hz_[c], fb);
+            float shifted = echo_running_
+                                ? shifter_[c].Process(ringed + echo_feedback * echo_return[c], shift[c] + drift_hz_[c],
+                                                      fb * (1.f - echo))
+                                : shifter_[c].Process(ringed, shift[c] + drift_hz_[c], fb);
+            if (echo_running_) echo_[c].Write(shifted);
             float received = fading_[c].Process(shifted) + static_[c].Process();
             if (level_carriers > 0.f) received += carriers_[c].Process();
             if (level_morse > 0.f) received += morse_[c].Process();

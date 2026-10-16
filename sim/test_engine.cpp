@@ -1715,6 +1715,7 @@ static float Rms(const std::vector<float> &x) { return x.empty() ? 0.f : sqrtf((
 
 // The effects built in this step
 static const uint32_t kBuiltEffects =
+    bitch::Bit(bitch::kEchoes) | bitch::Bit(bitch::kReverseEchoes) | bitch::Bit(bitch::kPingPongEchoes) |
     bitch::Bit(bitch::kBitcrush) | bitch::Bit(bitch::kRateCrush) | bitch::Bit(bitch::kDropouts) | bitch::Bit(bitch::kStutter) | bitch::Bit(bitch::kCodecWarble) |
     bitch::Bit(bitch::kScrambler) | bitch::Bit(bitch::kHoppingScrambler) |
     bitch::Bit(bitch::kCarriers) | bitch::Bit(bitch::kSelcall) | bitch::Bit(bitch::kMorseChimes) | bitch::Bit(bitch::kJammer) |
@@ -3034,6 +3035,65 @@ static void TestEngineCapture() {
     CHECK(Peak(Window(bl, 0.6f, 1.f)) < 1e-4f, "no tape: Freeze still froze");
 }
 
+// The echo pads: a short tone burst comes back after the echo time, shifted further each time
+static void TestEffectEchoes() {
+    auto burst = [](int k) { return k < 4800 ? Sine(1000.f, 0.25f, k) : 0.f; }; // 100 ms of 1 kHz
+    bitch::Engine e;
+    e.Init(kSampleRate, 48, nullptr, &test_tape);
+    bitch::Params p;
+    p.tune_hz = 100.f;
+    p.effect_amount = 0.35f; // echo time 150 ms
+    p.effects = bitch::Bit(bitch::kEchoes);
+    std::vector<float> l, r;
+    int n = 0;
+    RunFor(e, p, 0.2f, [](int) { return 0.f; }, n, l, r); // the line clears (~48 ms) before it starts
+    l.clear();
+    r.clear();
+    int start = n;
+    RunFor(e, p, 1.f, [&](int k) { return burst(k - start); }, n, l, r);
+    // The first repeat (around 150-250 ms) is shifted twice: 1 kHz + 100 (direct) + 100 (repeat)
+    auto first = Window(l, 0.16f, 0.24f), second = Window(l, 0.31f, 0.39f);
+    CHECK(Magnitude(first, 1200.f) > 3 * Magnitude(first, 1100.f), "echo 1: 1200 Hz %.4f vs 1100 Hz %.4f",
+          Magnitude(first, 1200.f), Magnitude(first, 1100.f));
+    CHECK(Magnitude(second, 1300.f) > 3 * Magnitude(second, 1200.f), "echo 2: 1300 Hz %.4f vs 1200 Hz %.4f",
+          Magnitude(second, 1300.f), Magnitude(second, 1200.f));
+    // Without the pad: no repeats
+    bitch::Engine plain;
+    plain.Init(kSampleRate, 48, nullptr, &test_tape);
+    p.effects = 0u;
+    std::vector<float> pl, pr;
+    n = 0;
+    RunFor(plain, p, 1.f, burst, n, pl, pr);
+    CHECK(Rms(Window(pl, 0.16f, 0.24f)) < 1e-3f, "no echo pad: repeats anyway (%g)", Rms(Window(pl, 0.16f, 0.24f)));
+    // Ping-pong: the repeats cross sides (the left input's burst repeats on the right)
+    bitch::Engine pp;
+    pp.Init(kSampleRate, 48, nullptr, &test_tape);
+    p.effects = bitch::Bit(bitch::kPingPongEchoes);
+    p.tune_hz = 0.f;
+    float in_l[48], in_r[48], out_l[48], out_r[48];
+    std::vector<float> ppl, ppr;
+    for (int b = 0; b < (int)(0.2f * kSampleRate / 48); b++) {
+        for (int k = 0; k < 48; k++) {
+            in_l[k] = 0.f;
+            in_r[k] = Sine(5000.f, 0.002f, k);
+        }
+        pp.Process(in_l, in_r, out_l, out_r, 48, p);
+    }
+    for (int b = 0; b < (int)(1.f * kSampleRate / 48); b++) {
+        for (int k = 0; k < 48; k++) {
+            in_l[k] = burst(b * 48 + k);
+            in_r[k] = Sine(5000.f, 0.002f, b * 48 + k); // a faint right input, above -60 dBFS so mono
+                                                        // detection doesn't copy the left into it
+        }
+        pp.Process(in_l, in_r, out_l, out_r, 48, p);
+        ppl.insert(ppl.end(), out_l, out_l + 48);
+        ppr.insert(ppr.end(), out_r, out_r + 48);
+    }
+    CHECK(Rms(Window(ppr, 0.16f, 0.24f)) > 3 * Rms(Window(ppl, 0.16f, 0.24f)),
+          "ping-pong: first repeat right %.4f vs left %.4f", Rms(Window(ppr, 0.16f, 0.24f)),
+          Rms(Window(ppl, 0.16f, 0.24f)));
+}
+
 int main() {
     TestSoftQuantize();
     TestSoftClip();
@@ -3137,6 +3197,7 @@ int main() {
     TestEchoLoop();
     TestCaptureLoop();
     TestEngineCapture();
+    TestEffectEchoes();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }
