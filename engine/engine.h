@@ -24,6 +24,7 @@
 #include "dropouts.h"
 #include "stutter.h"
 #include "codec_warble.h"
+#include "tape.h"
 
 namespace bitch {
 
@@ -47,6 +48,7 @@ struct Params {
     float reverb = 0.f;          // plate reverb 0-1: return level (up to -6 dB) and decay (0 = off)
     uint32_t effects = 0;        // pad effects: bit i = Effect i (effects.h); 0 = none
     float effect_amount = 0.35f; // how strong, 0.35-1 (the front end passes EffectAmount(reception))
+    CaptureMode capture = CaptureMode::kNormal; // switch 2
 };
 
 // The sound engine: no hardware code, so it runs on the Daisy and on the Mac.
@@ -62,11 +64,14 @@ struct Params {
 // A light stereo plate reverb (Params::reverb) is added after the dry/wet mix, before the soft clip.
 // Pad effects (Params::effects, see effects.h) each fade in and out over ~30 ms; with none on, the sound is unchanged.
 // Page 3's damage pads (codec warble, sample-rate crush, bitcrush, stutter, dropouts) work on the whole sound: after the dry/wet mix and the reverb, before the soft clip.
+// Capture (switch 2: Normal / Freeze / Loop) sits at the very start, so everything after it hears the captured sound.
 class Engine {
   public:
     // block_size: the size every Process() call will use (the firmware and sim use 48).
     // plate: the reverb is ~145 KB, so the caller provides it (or none: then Params::reverb is ignored)
-    void Init(float sample_rate, size_t block_size = 48, PlateReverb *plate = nullptr);
+    // tape: the echoes' and the capture's buffers (~1.1 MB, owned by the front end); without it,
+    // the echo pads and capture do nothing
+    void Init(float sample_rate, size_t block_size = 48, PlateReverb *plate = nullptr, TapeMemory *tape = nullptr);
     // Test hook: a side's shifter oscillator phase (0-1)
     float ShifterPhase(int side) const { return shifter_[side].Phase(); }
     float SelcallToneHz() const { return selcall_.ToneHz(); }
@@ -155,6 +160,9 @@ class Engine {
     // Their levels at the end of the last block (ramped across each block from there), in chain
     // order: codec warble, sample-rate crush, bitcrush, stutter, dropouts
     float damage_level_[5] = {};
+    // Switch 2 and the echoes, using the front end's tape memory (if any)
+    TapeMemory *tape_ = nullptr;
+    CaptureLoop capture_;
 };
 
 } // namespace bitch

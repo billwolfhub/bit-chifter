@@ -31,9 +31,10 @@ static float Clamp(float x, float lo, float hi) { return fminf(fmaxf(x, lo), hi)
 // The damage pads in chain order (damage_level_ follows it)
 static const Effect kDamage[5] = {kCodecWarble, kRateCrush, kBitcrush, kStutter, kDropouts};
 
-void Engine::Init(float sample_rate, size_t block_size, PlateReverb *plate) {
+void Engine::Init(float sample_rate, size_t block_size, PlateReverb *plate, TapeMemory *tape) {
     sample_rate_ = sample_rate;
     plate_ = plate;
+    tape_ = tape;
     float block_rate = sample_rate / (float)block_size;
     for (RingMod &r : ring_) r.Init(sample_rate);
     for (Shifter &s : shifter_) s.Init(sample_rate);
@@ -56,6 +57,7 @@ void Engine::Init(float sample_rate, size_t block_size, PlateReverb *plate) {
     for (RateCrush &r : rate_crush_) r.Init(sample_rate);
     stutter_.Init(sample_rate, 17u);
     dropouts_.Init(sample_rate, 19u);
+    if (tape_) capture_.Init(sample_rate, tape_->capture[0], tape_->capture[1]);
     hand_.Init(block_rate, 47u);
     pitch_.Init(sample_rate);
     squelch_attack_ = 1.f / (0.002f * sample_rate);
@@ -125,6 +127,7 @@ void Engine::Reset() {
     stutter_.Reset();
     dropouts_.Reset();
     for (float &v : damage_level_) v = 0.f;
+    if (tape_) capture_.Reset();
 }
 
 void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *out_r, size_t size,
@@ -305,6 +308,7 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
     const float crush_step = CrushStep(CrushBits(amount_radio)), crush_inv_step = 1.f / crush_step;
     if (damaging[3]) stutter_.Update(amount_radio, (float)size / sample_rate_);
     if (damaging[4]) dropouts_.Update(amount_radio);
+    if (tape_) capture_.Set(params.capture);
 
     // The plate: idle (and skipped) at 0 or without a plate. While idle it is cleared in steps
     // (1024 floats a block, ~40 ms for all of it), and it starts again only once clean, so an
@@ -353,6 +357,7 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
 
     for (size_t i = 0; i < size; i++) {
         float x[2] = {in_l[i], in_r[i]};
+        if (tape_) capture_.Process(x[0], x[1]); // switch 2: everything after hears the captured sound
         pitch_.Push(0.5f * (x[0] + x[1]));
         for (int c = 0; c < 2; c++) envelope_[c] = fmaxf(fabsf(x[c]), envelope_[c] * envelope_release_);
         shift_hz_ += glide_ * (target_shift_ - shift_hz_);

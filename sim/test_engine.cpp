@@ -33,6 +33,7 @@
 #include "crush.h"
 #include "capture_loop.h"
 #include "echo_loop.h"
+#include "tape.h"
 #include <algorithm>
 #include <cstdint>
 
@@ -3004,6 +3005,35 @@ static void TestCaptureLoop() {
     CHECK(step < 0.03f, "freeze: a step of %.4f (the tone's own is 0.0144)", step);
 }
 
+static bitch::TapeMemory test_tape; // ~1.1 MB: off the stack
+
+// Capture in the engine: Freeze holds the input (the whole chain, dry included, plays it)
+static void TestEngineCapture() {
+    bitch::Engine e;
+    e.Init(kSampleRate, 48, nullptr, &test_tape);
+    bitch::Params p;
+    p.mix = 0.f; // dry: the capture is at the input, so even the dry signal is frozen
+    std::vector<float> l, r;
+    int n = 0;
+    RunFor(e, p, 1.f, [](int k) { return Sine(440.f, 0.25f, k); }, n, l, r);
+    p.capture = bitch::CaptureMode::kFreeze;
+    RunFor(e, p, 2.f, [](int) { return 0.f; }, n, l, r); // the input goes silent
+    CHECK(Magnitude(Window(l, 2.f, 3.f), 440.f) > 0.1, "engine freeze: the tone didn't hold");
+    p.capture = bitch::CaptureMode::kNormal;
+    RunFor(e, p, 0.5f, [](int) { return 0.f; }, n, l, r);
+    CHECK(Peak(Window(l, 3.2f, 3.5f)) < 1e-4f, "engine capture: still playing after Normal (%g)",
+          Peak(Window(l, 3.2f, 3.5f)));
+    // Without tape memory: Freeze does nothing
+    bitch::Engine bare;
+    bare.Init(kSampleRate);
+    p.capture = bitch::CaptureMode::kFreeze;
+    std::vector<float> bl, br;
+    n = 0;
+    RunFor(bare, p, 0.5f, [](int k) { return Sine(440.f, 0.25f, k); }, n, bl, br);
+    RunFor(bare, p, 0.5f, [](int) { return 0.f; }, n, bl, br);
+    CHECK(Peak(Window(bl, 0.6f, 1.f)) < 1e-4f, "no tape: Freeze still froze");
+}
+
 int main() {
     TestSoftQuantize();
     TestSoftClip();
@@ -3106,6 +3136,7 @@ int main() {
     TestEffectsDamageAtAnyMix();
     TestEchoLoop();
     TestCaptureLoop();
+    TestEngineCapture();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }
