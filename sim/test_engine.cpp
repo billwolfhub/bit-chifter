@@ -1652,6 +1652,27 @@ static void TestPadPages() {
     for (int i = 0; i < 60; i++) step(10, 1u << 10, 0);
     step(10, 0, 0);
     CHECK(pp.TakeStereoSteps() == 0, "TOU 0.6 s: stepped the stereo mode");
+    // Chaos (page 3, bottom right): while held, 2-3 other effects (not Fade-out or Squelch, which
+    // would just silence things); a new set at each touch; off at the release
+    uint32_t sets[6];
+    for (int touch = 0; touch < 6; touch++) {
+        step(37 + 11 * touch, 1u << 9, 2);
+        uint32_t fx = pp.Effects() & ~Bit(kChaos);
+        int count = 0;
+        for (int k = 0; k < kEffectCount; k++) count += (fx >> k) & 1u;
+        CHECK(count >= 2 && count <= 3, "chaos: %d effects (%08x)", count, fx);
+        CHECK(!(fx & (Bit(kFadeOut) | Bit(kSquelch))), "chaos picked fade-out or squelch (%08x)", fx);
+        sets[touch] = fx;
+        step(50, 0, 2);
+        CHECK(pp.Effects() == 0, "chaos: still on after release (%08x)", pp.Effects());
+    }
+    int distinct = 0;
+    for (int a = 0; a < 6; a++) {
+        bool seen = false;
+        for (int b = 0; b < a; b++) seen = seen || sets[b] == sets[a];
+        distinct += !seen;
+    }
+    CHECK(distinct >= 4, "chaos: only %d different sets in 6 touches", distinct);
 }
 
 static void TestLowBlip() {
