@@ -25,7 +25,12 @@ class Dropouts {
         gain_ = 1.f;
         gap_left_ = 0;
     }
-    void Update(float amount) { chance_ = (0.3f + 3.7f * EffectRange(amount)) / sample_rate_; }
+    // Gaps can only start outside a gap: the chance is scaled up so the average rate is as given
+    // (0.112 s: the mean gap, 0.11 s, plus its edges)
+    void Update(float amount) {
+        float rate = 0.3f + 3.7f * EffectRange(amount);
+        chance_ = rate / (1.f - rate * 0.112f) / sample_rate_;
+    }
     float Gain() {
         if (gap_left_ > 0) {
             gap_left_--;

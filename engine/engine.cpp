@@ -302,7 +302,7 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
     if (starting[4]) dropouts_.Reset();
     if (damaging[0]) codec_.Update(amount_radio, (int)size);
     if (damaging[1]) for (RateCrush &rc : rate_crush_) rc.Update(amount_radio);
-    const float crush_step = CrushStep(CrushBits(amount_radio));
+    const float crush_step = CrushStep(CrushBits(amount_radio)), crush_inv_step = 1.f / crush_step;
     if (damaging[3]) stutter_.Update(amount_radio, (float)size / sample_rate_);
     if (damaging[4]) dropouts_.Update(amount_radio);
 
@@ -405,20 +405,20 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
         float d[5];
         for (int k = 0; k < 5; k++) d[k] = damaging[k] ? damage_from[k] + t * (damage_to[k] - damage_from[k]) : 0.f;
         if (damaging[0]) {
-            float l = filtered[0], r = filtered[1];
-            codec_.Process(l, r);
-            filtered[0] += d[0] * (l - filtered[0]);
-            filtered[1] += d[0] * (r - filtered[1]);
+            float side_l = filtered[0], side_r = filtered[1];
+            codec_.Process(side_l, side_r);
+            filtered[0] += d[0] * (side_l - filtered[0]);
+            filtered[1] += d[0] * (side_r - filtered[1]);
         }
         for (int c = 0; c < 2; c++) {
             if (damaging[1]) filtered[c] += d[1] * (rate_crush_[c].Process(filtered[c]) - filtered[c]);
-            if (damaging[2]) filtered[c] += d[2] * (Bitcrush(filtered[c], crush_step) - filtered[c]);
+            if (damaging[2]) filtered[c] += d[2] * (Bitcrush(filtered[c], crush_step, crush_inv_step) - filtered[c]);
         }
         if (damaging[3]) {
-            float l = filtered[0], r = filtered[1];
-            stutter_.Process(l, r);
-            filtered[0] += d[3] * (l - filtered[0]);
-            filtered[1] += d[3] * (r - filtered[1]);
+            float side_l = filtered[0], side_r = filtered[1];
+            stutter_.Process(side_l, side_r);
+            filtered[0] += d[3] * (side_l - filtered[0]);
+            filtered[1] += d[3] * (side_r - filtered[1]);
         }
         if (damaging[4]) {
             float drop = 1.f - d[4] * (1.f - dropouts_.Gain());

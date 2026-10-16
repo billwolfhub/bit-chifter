@@ -27,12 +27,11 @@ class Stutter {
     void Reset() {
         write_ = filled_ = 0;
         repeats_left_ = 0;
-        rate_ = 0.5f;
     }
 
     void Update(float amount, float block_seconds) {
-        rate_ = 0.5f + 3.5f * EffectRange(amount);
-        if (repeats_left_ > 0 || random_.Uniform() >= rate_ * block_seconds) return;
+        float rate = 0.5f + 3.5f * EffectRange(amount);
+        if (repeats_left_ > 0 || random_.Uniform() >= rate * block_seconds) return;
         int length = (int)((0.03f + 0.09f * random_.Uniform()) * sample_rate_);
         if (length > kMax) length = kMax;
         if (filled_ < length) return; // not enough recorded yet
@@ -41,6 +40,9 @@ class Stutter {
         if (start_ < 0) start_ += kMax;
         position_ = 0;
         repeats_left_ = 2 + (int)(random_.Uniform() * 7.f); // 2-8
+        // Recording pauses while repeating: the next stutter needs a fresh, unbroken fragment
+        // (one spanning the pause would have a splice in it)
+        filled_ = 0;
     }
 
     void Process(float &l, float &r) {
@@ -53,7 +55,7 @@ class Stutter {
         }
         int read = start_ + position_;
         if (read >= kMax) read -= kMax;
-        float g = fminf(fminf((float)position_, (float)(length_ - position_)) / (float)fade_, 1.f);
+        float g = FadeGain();
         l += g * (buffer_[0][read] - l);
         r += g * (buffer_[1][read] - r);
         if (++position_ >= length_) {
@@ -63,9 +65,14 @@ class Stutter {
     }
 
     bool Repeating() const { return repeats_left_ > 0; }
+    // The repeat's gain against the live signal for the next sample (0 = live, 1 = all repeat)
+    float FadeGain() const {
+        if (repeats_left_ <= 0) return 0.f;
+        return fminf(fminf((float)position_, (float)(length_ - position_)) / (float)fade_, 1.f);
+    }
 
   private:
-    float sample_rate_ = 48000.f, rate_ = 0.5f;
+    float sample_rate_ = 48000.f;
     int fade_ = 96, write_ = 0, filled_ = 0, start_ = 0, length_ = 1, position_ = 0, repeats_left_ = 0;
     float buffer_[2][kMax] = {};
     Random random_;

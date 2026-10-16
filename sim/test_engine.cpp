@@ -2495,7 +2495,7 @@ static void TestCrush() {
     float step = bitch::CrushStep(3.f);
     bool on_grid = true;
     for (int n = 0; n < 4800; n++) {
-        float y = bitch::Bitcrush(Sine(440.f, 0.8f, n), step);
+        float y = bitch::Bitcrush(Sine(440.f, 0.8f, n), step, 1.f / step);
         float k = y / 0.25f;
         on_grid = on_grid && fabsf(k - roundf(k)) < 1e-6f;
     }
@@ -2505,7 +2505,7 @@ static void TestCrush() {
     float worst = 0.f;
     for (int n = 0; n < 4800; n++) {
         float x = Sine(440.f, 0.8f, n);
-        worst = std::max(worst, fabsf(bitch::Bitcrush(x, step) - x));
+        worst = std::max(worst, fabsf(bitch::Bitcrush(x, step, 1.f / step) - x));
     }
     CHECK(worst <= 0.5f * step + 1e-7f, "bitcrush 10 bits: error %g (step %g)", worst, step);
     // Sample-and-hold: 1.5 kHz at amount 1 (about 150 new values in 0.1 s), 12 kHz at 0.35
@@ -2555,12 +2555,14 @@ static void RunDropouts(float amount, float seconds, int &gaps, float &gone, flo
 static void TestDropouts() {
     int gaps;
     float gone, step;
-    RunDropouts(1.f, 10.f, gaps, gone, step);
-    CHECK(gaps >= 20 && gaps <= 60, "dropouts at 1: %d gaps in 10 s (want ~40)", gaps);
+    RunDropouts(1.f, 20.f, gaps, gone, step);
+    printf("  dropouts at 1: %.2f gaps/s (want 4), gone %.0f%% of the time\n", gaps / 20.f, 100.f * gone);
+    CHECK(gaps >= 68 && gaps <= 92, "dropouts at 1: %.2f gaps/s (want 3.4-4.6)", gaps / 20.f);
     CHECK(gone > 0.2f && gone < 0.65f, "dropouts at 1: gone %.0f%% of the time", 100.f * gone);
     CHECK(step <= 1.f / 48.f + 1e-6f, "dropouts: gain steps by %.4f (1 ms edges: 1/48 at most)", step);
-    RunDropouts(0.35f, 20.f, gaps, gone, step);
-    CHECK(gaps >= 2 && gaps <= 12, "dropouts at 0.35: %d gaps in 20 s (want ~6)", gaps);
+    RunDropouts(0.35f, 40.f, gaps, gone, step);
+    printf("  dropouts at 0.35: %.2f gaps/s (want 0.3)\n", gaps / 40.f);
+    CHECK(gaps >= 6 && gaps <= 20, "dropouts at 0.35: %.2f gaps/s (want 0.15-0.5)", gaps / 40.f);
 }
 
 static void TestStutter() {
@@ -2599,6 +2601,36 @@ static void TestStutter() {
         live_at_start = live_at_start && l == (float)n;
     }
     CHECK(live_at_start, "stutter: repeated before it had a whole fragment");
+    // Every fragment is one unbroken stretch of the input: on a ramp (l = n, r = -n), where the
+    // repeat is fully in (between the 2 ms fades) the output rises by exactly 1 a sample
+    s.Init(kSampleRate, 17u);
+    int fragments = 0, spliced = 0, jumps = 0;
+    bool in_jump = false;
+    float prev_l = 0.f, prev_g = 0.f;
+    for (int b = 0; b < (int)(60.f * kSampleRate / 48); b++) {
+        bool was_repeating = s.Repeating();
+        s.Update(1.f, 48.f / kSampleRate);
+        if (s.Repeating() && !was_repeating) {
+            fragments++;
+            in_jump = false;
+        }
+        for (int k = 0; k < 48; k++) {
+            int n = b * 48 + k;
+            float g = s.FadeGain();
+            float l = (float)n, r = -(float)n;
+            s.Process(l, r);
+            if (g == 1.f && prev_g == 1.f && l - prev_l != 1.f) {
+                jumps++;
+                if (!in_jump) spliced++;
+                in_jump = true;
+            }
+            prev_l = l;
+            prev_g = g;
+        }
+    }
+    printf("  stutter: %d of %d fragments spliced (%d jumps)\n", spliced, fragments, jumps);
+    CHECK(fragments > 50 && jumps == 0, "stutter: %d of %d fragments contain a splice (%d jumps)", spliced, fragments,
+          jumps);
 }
 
 static std::vector<float> RunCodec(bitch::CodecWarble &c, float amount, float seconds, float hz) {
@@ -2644,6 +2676,61 @@ static void TestCodecWarble() {
         }
     }
     CHECK(same, "codec warble: the sides differ");
+}
+
+// Each damage pad on and off (amount 0.6, a 220 Hz tone): the worst step in the 35 ms after each
+// toggle, against the steady steps with the effect on (for the crushers their own staircase is
+// the sound) and off
+static float DamageNoClickWorstRatio(bitch::Effect pad) {
+    const float kAmount = 0.6f;
+    auto tone = [](int k) { return Sine(220.f, 0.25f, k); };
+    auto max_step = [](const std::vector<float> &x, size_t from, size_t to) {
+        float step = 0.f;
+        for (size_t k = std::max<size_t>(from, 1); k < std::min(to, x.size()); k++)
+            step = std::max(step, fabsf(x[k] - x[k - 1]));
+        return step;
+    };
+    // The steady references: the pad held for 3 s (after the first 0.5 s), and the plain tone
+    float steady = 0.f;
+    for (uint32_t effects : {bitch::Bit(pad), 0u}) {
+        bitch::Engine e;
+        e.Init(kSampleRate);
+        bitch::Params p;
+        p.effect_amount = kAmount;
+        p.effects = effects;
+        std::vector<float> l, r;
+        int n = 0;
+        RunFor(e, p, 3.f, tone, n, l, r);
+        steady = std::max(steady, max_step(l, (size_t)(0.5f * kSampleRate), l.size()));
+    }
+    bitch::Engine e;
+    e.Init(kSampleRate);
+    bitch::Params p;
+    p.effect_amount = kAmount;
+    std::vector<float> l, r;
+    int n = 0;
+    const int kToggles = 40;
+    const size_t segment = (size_t)(0.1f * kSampleRate), fade = (size_t)(0.035f * kSampleRate);
+    for (int i = 0; i < kToggles; i++) {
+        p.effects ^= bitch::Bit(pad);
+        RunFor(e, p, 0.1f, tone, n, l, r);
+    }
+    float worst = 0.f;
+    for (int i = 1; i < kToggles; i++) {
+        size_t at = i * segment;
+        worst = std::max(worst, max_step(l, at, at + fade) / steady);
+    }
+    return worst;
+}
+
+static void TestEffectsDamageNoClick() {
+    const bitch::Effect kPads[5] = {bitch::kCodecWarble, bitch::kRateCrush, bitch::kBitcrush, bitch::kStutter,
+                                    bitch::kDropouts};
+    for (bitch::Effect pad : kPads) {
+        float worst = DamageNoClickWorstRatio(pad);
+        printf("  %s on/off: worst step %.2fx the steady ones\n", bitch::EffectName(pad), worst);
+        CHECK(worst < 2.5f, "%s on/off: a step %.2fx the steady ones", bitch::EffectName(pad), worst);
+    }
 }
 
 // Runs an engine (no plate) on a 1 kHz tone with the given effects, returning the left output
@@ -2798,6 +2885,7 @@ int main() {
     TestStutter();
     TestCodecWarble();
     TestEffectsDamage();
+    TestEffectsDamageNoClick();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }

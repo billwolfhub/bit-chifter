@@ -50,7 +50,7 @@ static void TestCrush() {
     float step = bitch::CrushStep(3.f);
     bool on_grid = true;
     for (int n = 0; n < 4800; n++) {
-        float y = bitch::Bitcrush(Sine(440.f, 0.8f, n), step);
+        float y = bitch::Bitcrush(Sine(440.f, 0.8f, n), step, 1.f / step);
         float k = y / 0.25f;
         on_grid = on_grid && fabsf(k - roundf(k)) < 1e-6f;
     }
@@ -60,7 +60,7 @@ static void TestCrush() {
     float worst = 0.f;
     for (int n = 0; n < 4800; n++) {
         float x = Sine(440.f, 0.8f, n);
-        worst = std::max(worst, fabsf(bitch::Bitcrush(x, step) - x));
+        worst = std::max(worst, fabsf(bitch::Bitcrush(x, step, 1.f / step) - x));
     }
     CHECK(worst <= 0.5f * step + 1e-7f, "bitcrush 10 bits: error %g (step %g)", worst, step);
     // Sample-and-hold: 1.5 kHz at amount 1 (about 150 new values in 0.1 s), 12 kHz at 0.35
@@ -103,10 +103,12 @@ Expected: compile error, `'crush.h' file not found`.
 namespace bitch {
 
 // Bitcrush: the signal quantised to `bits` bits over -1..1 (no dither): 10 bits (amount 0.35)
-// down to 3 bits (amount 1). CrushStep() once per block, Bitcrush() per sample.
+// down to 3 bits (amount 1). A mid-tread quantiser (0 is a level), so `bits` bits give
+// 2^bits + 1 levels over -1..1 (3 bits: 9, steps of 0.25). CrushStep() and its inverse once
+// per block, Bitcrush() per sample.
 inline float CrushBits(float amount) { return 10.f - 7.f * EffectRange(amount); }
 inline float CrushStep(float bits) { return 2.f / exp2f(bits); }
-inline float Bitcrush(float x, float step) { return step * floorf(x / step + 0.5f); }
+inline float Bitcrush(float x, float step, float inv_step) { return step * floorf(x * inv_step + 0.5f); }
 
 // Sample-rate crush: sample-and-hold at 12 kHz (amount 0.35) down to 1.5 kHz (amount 1), with
 // no anti-aliasing (the aliasing is the sound). Update() once per block, Process() per sample.
@@ -191,12 +193,14 @@ static void RunDropouts(float amount, float seconds, int &gaps, float &gone, flo
 static void TestDropouts() {
     int gaps;
     float gone, step;
-    RunDropouts(1.f, 10.f, gaps, gone, step);
-    CHECK(gaps >= 20 && gaps <= 60, "dropouts at 1: %d gaps in 10 s (want ~40)", gaps);
+    RunDropouts(1.f, 20.f, gaps, gone, step);
+    printf("  dropouts at 1: %.2f gaps/s (want 4), gone %.0f%% of the time\n", gaps / 20.f, 100.f * gone);
+    CHECK(gaps >= 68 && gaps <= 92, "dropouts at 1: %.2f gaps/s (want 3.4-4.6)", gaps / 20.f);
     CHECK(gone > 0.2f && gone < 0.65f, "dropouts at 1: gone %.0f%% of the time", 100.f * gone);
     CHECK(step <= 1.f / 48.f + 1e-6f, "dropouts: gain steps by %.4f (1 ms edges: 1/48 at most)", step);
-    RunDropouts(0.35f, 20.f, gaps, gone, step);
-    CHECK(gaps >= 2 && gaps <= 12, "dropouts at 0.35: %d gaps in 20 s (want ~6)", gaps);
+    RunDropouts(0.35f, 40.f, gaps, gone, step);
+    printf("  dropouts at 0.35: %.2f gaps/s (want 0.3)\n", gaps / 40.f);
+    CHECK(gaps >= 6 && gaps <= 20, "dropouts at 0.35: %.2f gaps/s (want 0.15-0.5)", gaps / 40.f);
 }
 ```
 Call `TestDropouts();` from `main()`.
@@ -237,7 +241,12 @@ class Dropouts {
         gain_ = 1.f;
         gap_left_ = 0;
     }
-    void Update(float amount) { chance_ = (0.3f + 3.7f * EffectRange(amount)) / sample_rate_; }
+    // Gaps can only start outside a gap: the chance is scaled up so the average rate is as given
+    // (0.112 s: the mean gap, 0.11 s, plus its edges)
+    void Update(float amount) {
+        float rate = 0.3f + 3.7f * EffectRange(amount);
+        chance_ = rate / (1.f - rate * 0.112f) / sample_rate_;
+    }
     float Gain() {
         if (gap_left_ > 0) {
             gap_left_--;
@@ -319,6 +328,36 @@ static void TestStutter() {
         live_at_start = live_at_start && l == (float)n;
     }
     CHECK(live_at_start, "stutter: repeated before it had a whole fragment");
+    // Every fragment is one unbroken stretch of the input: on a ramp (l = n, r = -n), where the
+    // repeat is fully in (between the 2 ms fades) the output rises by exactly 1 a sample
+    s.Init(kSampleRate, 17u);
+    int fragments = 0, spliced = 0, jumps = 0;
+    bool in_jump = false;
+    float prev_l = 0.f, prev_g = 0.f;
+    for (int b = 0; b < (int)(60.f * kSampleRate / 48); b++) {
+        bool was_repeating = s.Repeating();
+        s.Update(1.f, 48.f / kSampleRate);
+        if (s.Repeating() && !was_repeating) {
+            fragments++;
+            in_jump = false;
+        }
+        for (int k = 0; k < 48; k++) {
+            int n = b * 48 + k;
+            float g = s.FadeGain();
+            float l = (float)n, r = -(float)n;
+            s.Process(l, r);
+            if (g == 1.f && prev_g == 1.f && l - prev_l != 1.f) {
+                jumps++;
+                if (!in_jump) spliced++;
+                in_jump = true;
+            }
+            prev_l = l;
+            prev_g = g;
+        }
+    }
+    printf("  stutter: %d of %d fragments spliced (%d jumps)\n", spliced, fragments, jumps);
+    CHECK(fragments > 50 && jumps == 0, "stutter: %d of %d fragments contain a splice (%d jumps)", spliced, fragments,
+          jumps);
 }
 ```
 Call `TestStutter();` from `main()`.
@@ -361,12 +400,11 @@ class Stutter {
     void Reset() {
         write_ = filled_ = 0;
         repeats_left_ = 0;
-        rate_ = 0.5f;
     }
 
     void Update(float amount, float block_seconds) {
-        rate_ = 0.5f + 3.5f * EffectRange(amount);
-        if (repeats_left_ > 0 || random_.Uniform() >= rate_ * block_seconds) return;
+        float rate = 0.5f + 3.5f * EffectRange(amount);
+        if (repeats_left_ > 0 || random_.Uniform() >= rate * block_seconds) return;
         int length = (int)((0.03f + 0.09f * random_.Uniform()) * sample_rate_);
         if (length > kMax) length = kMax;
         if (filled_ < length) return; // not enough recorded yet
@@ -375,6 +413,9 @@ class Stutter {
         if (start_ < 0) start_ += kMax;
         position_ = 0;
         repeats_left_ = 2 + (int)(random_.Uniform() * 7.f); // 2-8
+        // Recording pauses while repeating: the next stutter needs a fresh, unbroken fragment
+        // (one spanning the pause would have a splice in it)
+        filled_ = 0;
     }
 
     void Process(float &l, float &r) {
@@ -387,7 +428,7 @@ class Stutter {
         }
         int read = start_ + position_;
         if (read >= kMax) read -= kMax;
-        float g = fminf(fminf((float)position_, (float)(length_ - position_)) / (float)fade_, 1.f);
+        float g = FadeGain();
         l += g * (buffer_[0][read] - l);
         r += g * (buffer_[1][read] - r);
         if (++position_ >= length_) {
@@ -397,9 +438,14 @@ class Stutter {
     }
 
     bool Repeating() const { return repeats_left_ > 0; }
+    // The repeat's gain against the live signal for the next sample (0 = live, 1 = all repeat)
+    float FadeGain() const {
+        if (repeats_left_ <= 0) return 0.f;
+        return fminf(fminf((float)position_, (float)(length_ - position_)) / (float)fade_, 1.f);
+    }
 
   private:
-    float sample_rate_ = 48000.f, rate_ = 0.5f;
+    float sample_rate_ = 48000.f;
     int fade_ = 96, write_ = 0, filled_ = 0, start_ = 0, length_ = 1, position_ = 0, repeats_left_ = 0;
     float buffer_[2][kMax] = {};
     Random random_;
@@ -618,6 +664,61 @@ git commit -m "Engine: codec warble"
 
 In `sim/test_engine.cpp`, add `bitch::Bit(bitch::kBitcrush) | bitch::Bit(bitch::kRateCrush) | bitch::Bit(bitch::kDropouts) | bitch::Bit(bitch::kStutter) | bitch::Bit(bitch::kCodecWarble) |` to `kBuiltEffects`, and above `main()`:
 ```cpp
+// Each damage pad on and off (amount 0.6, a 220 Hz tone): the worst step in the 35 ms after each
+// toggle, against the steady steps with the effect on (for the crushers their own staircase is
+// the sound) and off
+static float DamageNoClickWorstRatio(bitch::Effect pad) {
+    const float kAmount = 0.6f;
+    auto tone = [](int k) { return Sine(220.f, 0.25f, k); };
+    auto max_step = [](const std::vector<float> &x, size_t from, size_t to) {
+        float step = 0.f;
+        for (size_t k = std::max<size_t>(from, 1); k < std::min(to, x.size()); k++)
+            step = std::max(step, fabsf(x[k] - x[k - 1]));
+        return step;
+    };
+    // The steady references: the pad held for 3 s (after the first 0.5 s), and the plain tone
+    float steady = 0.f;
+    for (uint32_t effects : {bitch::Bit(pad), 0u}) {
+        bitch::Engine e;
+        e.Init(kSampleRate);
+        bitch::Params p;
+        p.effect_amount = kAmount;
+        p.effects = effects;
+        std::vector<float> l, r;
+        int n = 0;
+        RunFor(e, p, 3.f, tone, n, l, r);
+        steady = std::max(steady, max_step(l, (size_t)(0.5f * kSampleRate), l.size()));
+    }
+    bitch::Engine e;
+    e.Init(kSampleRate);
+    bitch::Params p;
+    p.effect_amount = kAmount;
+    std::vector<float> l, r;
+    int n = 0;
+    const int kToggles = 40;
+    const size_t segment = (size_t)(0.1f * kSampleRate), fade = (size_t)(0.035f * kSampleRate);
+    for (int i = 0; i < kToggles; i++) {
+        p.effects ^= bitch::Bit(pad);
+        RunFor(e, p, 0.1f, tone, n, l, r);
+    }
+    float worst = 0.f;
+    for (int i = 1; i < kToggles; i++) {
+        size_t at = i * segment;
+        worst = std::max(worst, max_step(l, at, at + fade) / steady);
+    }
+    return worst;
+}
+
+static void TestEffectsDamageNoClick() {
+    const bitch::Effect kPads[5] = {bitch::kCodecWarble, bitch::kRateCrush, bitch::kBitcrush, bitch::kStutter,
+                                    bitch::kDropouts};
+    for (bitch::Effect pad : kPads) {
+        float worst = DamageNoClickWorstRatio(pad);
+        printf("  %s on/off: worst step %.2fx the steady ones\n", bitch::EffectName(pad), worst);
+        CHECK(worst < 2.5f, "%s on/off: a step %.2fx the steady ones", bitch::EffectName(pad), worst);
+    }
+}
+
 // Runs an engine (no plate) on a 1 kHz tone with the given effects, returning the left output
 static std::vector<float> RunDamage(uint32_t effects, float amount, float seconds, float hz = 1000.f) {
     bitch::Engine e;
@@ -672,12 +773,12 @@ static void TestEffectsDamage() {
     CHECK(Db(on / off) < -20.0, "codec warble pad: 7 kHz only %.1f dB down", Db(on / off));
 }
 ```
-Add `#include <algorithm>` if it isn't already included (it is). Call `TestEffectsDamage();` from `main()`.
+Add `#include <algorithm>` if it isn't already included (it is). Call `TestEffectsDamage();` and `TestEffectsDamageNoClick();` from `main()` (before the `All tests passed` line).
 
 - [ ] **Step 2: Run to see it fail**
 
 Run: `~/local_files/daisy/bit-chifter/sim/run_tests.sh`
-Expected: FAIL lines from `TestEffectsDamage` (the pads do nothing yet); `TestEffectsUnbuiltDoNothing` still passes.
+Expected: FAIL lines from `TestEffectsDamage` (the pads do nothing yet); `TestEffectsUnbuiltDoNothing` still passes (and `TestEffectsDamageNoClick`, with nothing happening yet, may too: it guards the wiring's ramps).
 
 - [ ] **Step 3: Wire them in**
 
@@ -731,7 +832,7 @@ static const Effect kDamage[5] = {kCodecWarble, kRateCrush, kBitcrush, kStutter,
     if (starting[4]) dropouts_.Reset();
     if (damaging[0]) codec_.Update(amount_radio, (int)size);
     if (damaging[1]) for (RateCrush &rc : rate_crush_) rc.Update(amount_radio);
-    const float crush_step = CrushStep(CrushBits(amount_radio));
+    const float crush_step = CrushStep(CrushBits(amount_radio)), crush_inv_step = 1.f / crush_step;
     if (damaging[3]) stutter_.Update(amount_radio, (float)size / sample_rate_);
     if (damaging[4]) dropouts_.Update(amount_radio);
 ```
@@ -759,20 +860,20 @@ with
         float d[5];
         for (int k = 0; k < 5; k++) d[k] = damaging[k] ? damage_from[k] + t * (damage_to[k] - damage_from[k]) : 0.f;
         if (damaging[0]) {
-            float l = filtered[0], r = filtered[1];
-            codec_.Process(l, r);
-            filtered[0] += d[0] * (l - filtered[0]);
-            filtered[1] += d[0] * (r - filtered[1]);
+            float side_l = filtered[0], side_r = filtered[1];
+            codec_.Process(side_l, side_r);
+            filtered[0] += d[0] * (side_l - filtered[0]);
+            filtered[1] += d[0] * (side_r - filtered[1]);
         }
         for (int c = 0; c < 2; c++) {
             if (damaging[1]) filtered[c] += d[1] * (rate_crush_[c].Process(filtered[c]) - filtered[c]);
-            if (damaging[2]) filtered[c] += d[2] * (Bitcrush(filtered[c], crush_step) - filtered[c]);
+            if (damaging[2]) filtered[c] += d[2] * (Bitcrush(filtered[c], crush_step, crush_inv_step) - filtered[c]);
         }
         if (damaging[3]) {
-            float l = filtered[0], r = filtered[1];
-            stutter_.Process(l, r);
-            filtered[0] += d[3] * (l - filtered[0]);
-            filtered[1] += d[3] * (r - filtered[1]);
+            float side_l = filtered[0], side_r = filtered[1];
+            stutter_.Process(side_l, side_r);
+            filtered[0] += d[3] * (side_l - filtered[0]);
+            filtered[1] += d[3] * (side_r - filtered[1]);
         }
         if (damaging[4]) {
             float drop = 1.f - d[4] * (1.f - dropouts_.Gain());
@@ -792,7 +893,7 @@ Expected: `All tests passed`, including `TestEffectsUnbuiltDoNothing` (bit-exact
 
 - [ ] **Step 5: Check the firmware builds, and commit**
 
-Run: `make -C ~/local_files/daisy/bit-chifter` (touch `engine/engine.cpp` first) — expected: no errors or warnings; DTCMRAM about 83 KB of 128 KB. Report the DTCMRAM/SRAM lines.
+Run: `make -C ~/local_files/daisy/bit-chifter` (touch `engine/engine.cpp` first) — expected: no errors or warnings (engine.cpp is also clean with `-Wshadow`); DTCMRAM about 83 KB of 128 KB. Report the DTCMRAM/SRAM lines.
 ```bash
 cd ~/local_files/daisy/bit-chifter
 git add engine/engine.h engine/engine.cpp sim/test_engine.cpp
