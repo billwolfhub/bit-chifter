@@ -84,6 +84,19 @@ Carrier ×2 and Hold drift act on the wet signal, and Kill dry makes it fully we
   Stutter.
 - **Metal bells:** RING 100%, CARRIER 300–1500 Hz, a small TUNE shift; Mirror stereo (tap TOU once from power-up: two blips).
 
+## Prebuilt firmware
+
+Each [release](https://github.com/billwolfhub/bit-chifter/releases) has a ready-built `.bin`.
+It runs through the **Daisy bootloader** (v6.4), which you can install once from the
+**Bootloader** tab at [flash.daisy.audio](https://flash.daisy.audio) (or with `make
+program-boot`, below). Then tap RESET, press BOOT while the Seed's LED is slowly pulsing, and:
+
+```sh
+dfu-util -a 0 -s 0x90040000:leave -D bit-chifter-v0.1.0.bin -d ,0483:df11
+```
+
+Don't flash it to internal flash (0x08000000): that would overwrite the bootloader.
+
 ## Building and flashing
 
 Needs the Daisy toolchain (`arm-none-eabi-gcc` and `dfu-util`: see Electrosmith's
