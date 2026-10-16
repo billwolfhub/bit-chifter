@@ -1715,6 +1715,7 @@ static float Rms(const std::vector<float> &x) { return x.empty() ? 0.f : sqrtf((
 
 // The effects built in this step
 static const uint32_t kBuiltEffects =
+    bitch::Bit(bitch::kSpiralUp) | bitch::Bit(bitch::kSpiralDown) | bitch::Bit(bitch::kChirp) | bitch::Bit(bitch::kWarble) |
     bitch::Bit(bitch::kEchoes) | bitch::Bit(bitch::kReverseEchoes) | bitch::Bit(bitch::kPingPongEchoes) |
     bitch::Bit(bitch::kBitcrush) | bitch::Bit(bitch::kRateCrush) | bitch::Bit(bitch::kDropouts) | bitch::Bit(bitch::kStutter) | bitch::Bit(bitch::kCodecWarble) |
     bitch::Bit(bitch::kScrambler) | bitch::Bit(bitch::kHoppingScrambler) |
@@ -3094,6 +3095,58 @@ static void TestEffectEchoes() {
           Rms(Window(ppl, 0.16f, 0.24f)));
 }
 
+// Spiral up: the sound keeps rising (a Shepard-like pair of shifted voices); spiral down falls
+static void TestEffectSpiral() {
+    for (int up = 0; up < 2; up++) {
+        bitch::Engine e;
+        e.Init(kSampleRate);
+        bitch::Params p;
+        p.effect_amount = 1.f; // 0.5 cycles a second over 0-300 Hz
+        p.effects = bitch::Bit(up ? bitch::kSpiralUp : bitch::kSpiralDown);
+        std::vector<float> l, r;
+        int n = 0;
+        RunFor(e, p, 4.f, [](int k) { return Sine(1000.f, 0.25f, k); }, n, l, r);
+        // The output's energy sits between 1000 and 1300 Hz (up) or 700 and 1000 Hz (down)
+        auto w = Window(l, 1.f, 4.f);
+        double above = 0.0, below = 0.0;
+        for (float hz = 1050.f; hz <= 1250.f; hz += 50.f) above += Magnitude(w, hz);
+        for (float hz = 750.f; hz <= 950.f; hz += 50.f) below += Magnitude(w, hz);
+        if (up) CHECK(above > 3 * below, "spiral up: above %.4f vs below %.4f", above, below);
+        else CHECK(below > 3 * above, "spiral down: below %.4f vs above %.4f", below, above);
+        CHECK(Rms(w) > 0.1f, "spiral: level %.3f", Rms(w));
+    }
+}
+
+// Chirp: loud notes push the shift up (silence: no shift)
+static void TestEffectChirp() {
+    bitch::Engine e;
+    e.Init(kSampleRate);
+    bitch::Params p;
+    p.effect_amount = 0.35f; // up to +300 Hz at full level
+    p.effects = bitch::Bit(bitch::kChirp);
+    auto loud = ShiftTrace(e, p, 0.5f, [](int k) { return Sine(200.f, 0.5f, k); });
+    CHECK(loud.back() > 200.f && loud.back() < 320.f, "chirp: %.0f Hz on a full-level tone (want ~300)", loud.back());
+    auto quiet = ShiftTrace(e, p, 1.5f, [](int) { return 0.f; });
+    CHECK(fabsf(quiet.back()) < 5.f, "chirp: %.1f Hz after 1.5 s of silence", quiet.back());
+}
+
+// Warble: the shift wobbles around TUNE, by up to 20 Hz (amount 0.35)
+static void TestEffectWarble() {
+    bitch::Engine e;
+    e.Init(kSampleRate);
+    bitch::Params p;
+    p.tune_hz = 100.f;
+    p.effect_amount = 0.35f;
+    p.effects = bitch::Bit(bitch::kWarble);
+    auto trace = ShiftTrace(e, p, 4.f, [](int) { return 0.f; });
+    float lo = 1e9f, hi = -1e9f;
+    for (size_t k = 500; k < trace.size(); k++) {
+        lo = std::min(lo, trace[k]);
+        hi = std::max(hi, trace[k]);
+    }
+    CHECK(hi - lo > 15.f && hi - lo < 60.f && lo > 60.f && hi < 140.f, "warble at 0.35: %.1f-%.1f Hz", lo, hi);
+}
+
 int main() {
     TestSoftQuantize();
     TestSoftClip();
@@ -3198,6 +3251,9 @@ int main() {
     TestCaptureLoop();
     TestEngineCapture();
     TestEffectEchoes();
+    TestEffectSpiral();
+    TestEffectChirp();
+    TestEffectWarble();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }
