@@ -28,6 +28,9 @@ static const float kQuiet = 0.0005f;  // -66 dBFS: an input must stay below this
 
 static float Clamp(float x, float lo, float hi) { return fminf(fmaxf(x, lo), hi); }
 
+// The damage pads in chain order (damage_level_ follows it)
+static const Effect kDamage[5] = {kCodecWarble, kRateCrush, kBitcrush, kStutter, kDropouts};
+
 void Engine::Init(float sample_rate, size_t block_size, PlateReverb *plate) {
     sample_rate_ = sample_rate;
     plate_ = plate;
@@ -49,6 +52,10 @@ void Engine::Init(float sample_rate, size_t block_size, PlateReverb *plate) {
     }
     selcall_.Init(sample_rate, 71u);
     jammer_.Init(sample_rate, 6u);
+    codec_.Init(sample_rate, 13u);
+    for (RateCrush &r : rate_crush_) r.Init(sample_rate);
+    stutter_.Init(sample_rate, 17u);
+    dropouts_.Init(sample_rate, 19u);
     hand_.Init(block_rate, 47u);
     pitch_.Init(sample_rate);
     squelch_attack_ = 1.f / (0.002f * sample_rate);
@@ -113,6 +120,11 @@ void Engine::Reset() {
     selcall_.Stop();
     jammer_.Reset();
     scramble_level_ = selcall_level_ = 0.f;
+    codec_.Reset();
+    for (RateCrush &r : rate_crush_) r.Reset();
+    stutter_.Reset();
+    dropouts_.Reset();
+    for (float &v : damage_level_) v = 0.f;
 }
 
 void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *out_r, size_t size,
@@ -139,6 +151,7 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
         squelch_level_ = level_[kSquelch];
         scramble_level_ = fmaxf(level_[kScrambler], level_[kHoppingScrambler]);
         selcall_level_ = level_[kSelcall];
+        for (int k = 0; k < 5; k++) damage_level_[k] = level_[kDamage[k]];
     }
     // Pad effects: each fades in and out over ~30 ms
     const uint32_t fx = params.effects;
@@ -271,6 +284,27 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
         selcall_.Stop();
     }
     if (level_jammer > 0.f) jammer_.Update(amount_radio, level_jammer, (float)size / sample_rate_);
+    // Digital damage pads: run only while audible (reset as each one starts), their levels ramped
+    // across the block
+    float damage_from[5], damage_to[5];
+    bool damaging[5];
+    for (int k = 0; k < 5; k++) {
+        damage_from[k] = damage_level_[k];
+        damage_to[k] = level_[kDamage[k]];
+        damage_level_[k] = damage_to[k];
+        damaging[k] = damage_from[k] > 0.f || damage_to[k] > 0.f;
+    }
+    const bool starting[5] = {damaging[0] && damage_from[0] == 0.f, damaging[1] && damage_from[1] == 0.f,
+                              false, damaging[3] && damage_from[3] == 0.f, damaging[4] && damage_from[4] == 0.f};
+    if (starting[0]) codec_.Reset();
+    if (starting[1]) for (RateCrush &rc : rate_crush_) rc.Reset();
+    if (starting[3]) stutter_.Reset();
+    if (starting[4]) dropouts_.Reset();
+    if (damaging[0]) codec_.Update(amount_radio, (int)size);
+    if (damaging[1]) for (RateCrush &rc : rate_crush_) rc.Update(amount_radio);
+    const float crush_step = CrushStep(CrushBits(amount_radio));
+    if (damaging[3]) stutter_.Update(amount_radio, (float)size / sample_rate_);
+    if (damaging[4]) dropouts_.Update(amount_radio);
 
     // The plate: idle (and skipped) at 0 or without a plate. While idle it is cleared in steps
     // (1024 floats a block, ~40 ms for all of it), and it starts again only once clean, so an
@@ -352,11 +386,11 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
         float call = calling ? (selcall_from + t * (selcall_to - selcall_from)) * selcall_.Process() : 0.f;
         float jam = level_jammer > 0.f ? jammer_.Process() : 0.f;
         const float scramble = scramble_from + t * (scramble_to - scramble_from);
-        float y[2];
+        float y[2], dry[2], filtered[2];
         for (int c = 0; c < 2; c++) {
             take_other_[c] += take_glide_ * (take_target[c] - take_other_[c]);
-            float dry = signal_gain * (x[c] + take_other_[c] * x[1 - c]) + call;
-            float driven = drive_.Process(dry);
+            dry[c] = signal_gain * (x[c] + take_other_[c] * x[1 - c]) + call;
+            float driven = drive_.Process(dry[c]);
             if (scrambling) driven += scramble * (scrambler_[c].Process(driven) - driven);
             float ringed = ring_[c].Process(driven, carrier_hz_, ring_amount_);
             float shifted = shifter_[c].Process(ringed, shift[c] + drift_hz_[c], fb);
@@ -365,8 +399,35 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
             if (level_morse > 0.f) received += morse_[c].Process();
             received += jam;
             if (squelch_noise > 0.f) received += squelch_noise * squelch_noise_.Bipolar();
-            float wet = wet_gain * agc_[c].Process(filter_[c].Process(received));
-            y[c] = dry + mix_ * (wet - dry);
+            filtered[c] = filter_[c].Process(received);
+        }
+        // Digital damage (page 3), after the radio filter and before the AGC (so the AGC pumps on it)
+        float d[5];
+        for (int k = 0; k < 5; k++) d[k] = damaging[k] ? damage_from[k] + t * (damage_to[k] - damage_from[k]) : 0.f;
+        if (damaging[0]) {
+            float l = filtered[0], r = filtered[1];
+            codec_.Process(l, r);
+            filtered[0] += d[0] * (l - filtered[0]);
+            filtered[1] += d[0] * (r - filtered[1]);
+        }
+        for (int c = 0; c < 2; c++) {
+            if (damaging[1]) filtered[c] += d[1] * (rate_crush_[c].Process(filtered[c]) - filtered[c]);
+            if (damaging[2]) filtered[c] += d[2] * (Bitcrush(filtered[c], crush_step) - filtered[c]);
+        }
+        if (damaging[3]) {
+            float l = filtered[0], r = filtered[1];
+            stutter_.Process(l, r);
+            filtered[0] += d[3] * (l - filtered[0]);
+            filtered[1] += d[3] * (r - filtered[1]);
+        }
+        if (damaging[4]) {
+            float drop = 1.f - d[4] * (1.f - dropouts_.Gain());
+            filtered[0] *= drop;
+            filtered[1] *= drop;
+        }
+        for (int c = 0; c < 2; c++) {
+            float wet = wet_gain * agc_[c].Process(filtered[c]);
+            y[c] = dry[c] + mix_ * (wet - dry[c]);
         }
         float left = y[0] + swap_ * (y[1] - y[0]), right = y[1] + swap_ * (y[0] - y[1]);
         if (plate_running_) {

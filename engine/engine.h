@@ -20,6 +20,10 @@
 #include "morse_chimes.h"
 #include "selcall.h"
 #include "jammer.h"
+#include "crush.h"
+#include "dropouts.h"
+#include "stutter.h"
+#include "codec_warble.h"
 
 namespace bitch {
 
@@ -57,6 +61,7 @@ struct Params {
 // harmonic detents (pulled onto multiples of the tracked pitch) once per block.
 // A light stereo plate reverb (Params::reverb) is added after the dry/wet mix, before the soft clip.
 // Pad effects (Params::effects, see effects.h) each fade in and out over ~30 ms; with none on, the sound is unchanged.
+// Page 3's damage pads (codec warble, sample-rate crush, bitcrush, stutter, dropouts) sit after the radio filter, before the AGC.
 class Engine {
   public:
     // block_size: the size every Process() call will use (the firmware and sim use 48).
@@ -142,6 +147,14 @@ class Engine {
     // The scrambler's and Selcall's levels at the end of the last block: ramped across each block
     // from there (Carriers, Morse chimes and the jammer ramp their own gains)
     float scramble_level_ = 0.f, selcall_level_ = 0.f;
+    // Digital damage pads (page 3), after the radio filter and before the AGC
+    CodecWarble codec_;
+    RateCrush rate_crush_[2];
+    Stutter stutter_;
+    Dropouts dropouts_;
+    // Their levels at the end of the last block (ramped across each block from there), in chain
+    // order: codec warble, sample-rate crush, bitcrush, stutter, dropouts
+    float damage_level_[5] = {};
 };
 
 } // namespace bitch

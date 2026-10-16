@@ -1691,6 +1691,7 @@ static float Rms(const std::vector<float> &x) { return x.empty() ? 0.f : sqrtf((
 
 // The effects built in this step
 static const uint32_t kBuiltEffects =
+    bitch::Bit(bitch::kBitcrush) | bitch::Bit(bitch::kRateCrush) | bitch::Bit(bitch::kDropouts) | bitch::Bit(bitch::kStutter) | bitch::Bit(bitch::kCodecWarble) |
     bitch::Bit(bitch::kScrambler) | bitch::Bit(bitch::kHoppingScrambler) |
     bitch::Bit(bitch::kCarriers) | bitch::Bit(bitch::kSelcall) | bitch::Bit(bitch::kMorseChimes) | bitch::Bit(bitch::kJammer) |
     bitch::Bit(bitch::kFeedbackBurst) | bitch::Bit(bitch::kSpinUp) | bitch::Bit(bitch::kSpinDown) |
@@ -2645,6 +2646,60 @@ static void TestCodecWarble() {
     CHECK(same, "codec warble: the sides differ");
 }
 
+// Runs an engine (no plate) on a 1 kHz tone with the given effects, returning the left output
+static std::vector<float> RunDamage(uint32_t effects, float amount, float seconds, float hz = 1000.f) {
+    bitch::Engine e;
+    e.Init(kSampleRate);
+    bitch::Params p;
+    p.effects = effects;
+    p.effect_amount = amount;
+    std::vector<float> l, r;
+    int n = 0;
+    RunFor(e, p, seconds, [hz](int k) { return Sine(hz, 0.25f, k); }, n, l, r);
+    return l;
+}
+
+static void TestEffectsDamage() {
+    using bitch::Bit;
+    // Bitcrush at 3 bits: a 0.25 tone lands on -0.25, 0 or +0.25 (through the soft clip; the
+    // dry/wet mix's rounding moves it by a few ulps, hence the tolerance)
+    auto w = Window(RunDamage(Bit(bitch::kBitcrush), 1.f, 1.f), 0.5f, 1.f);
+    const float kGrid[3] = {bitch::SoftClip(-0.25f), 0.f, bitch::SoftClip(0.25f)};
+    int off_grid = 0;
+    for (float v : w) {
+        float nearest = 1e9f;
+        for (float g : kGrid) nearest = std::min(nearest, fabsf(v - g));
+        off_grid += nearest > 1e-5f;
+    }
+    CHECK(off_grid == 0, "bitcrush pad: %d samples off the 3-bit grid", off_grid);
+    // Sample-rate crush at 1.5 kHz: about 150 new values in 0.1 s (a held value moves only by
+    // rounding, far below 1e-4)
+    w = Window(RunDamage(Bit(bitch::kRateCrush), 1.f, 1.f), 0.5f, 0.6f);
+    int changes = 0;
+    for (size_t k = 1; k < w.size(); k++) changes += fabsf(w[k] - w[k - 1]) > 1e-4f;
+    CHECK(changes >= 140 && changes <= 160, "rate crush pad: %d new values in 0.1 s (want ~150)", changes);
+    // Dropouts: silent for a good part of the time
+    auto x = RunDamage(Bit(bitch::kDropouts), 1.f, 5.f);
+    int quiet = 0;
+    for (float v : x) quiet += fabsf(v) < 1e-4f;
+    CHECK(quiet > (int)(0.15f * x.size()), "dropouts pad: silent %.0f%% of the time",
+          100.f * (float)quiet / (float)x.size());
+    // Stutter: differs from the plain tone's output, stays finite
+    auto plain = RunDamage(0u, 1.f, 4.f, 440.f), stutter = RunDamage(Bit(bitch::kStutter), 1.f, 4.f, 440.f);
+    double diff = 0.0;
+    bool finite = true;
+    for (size_t k = 0; k < plain.size(); k++) {
+        diff += (double)(plain[k] - stutter[k]) * (plain[k] - stutter[k]);
+        finite = finite && std::isfinite(stutter[k]);
+    }
+    CHECK(finite && sqrt(diff / plain.size()) > 0.03, "stutter pad: no stutter (rms difference %.4f)",
+          sqrt(diff / plain.size()));
+    // Codec warble: nothing above ~4 kHz
+    float off = Rms(Window(RunDamage(0u, 0.35f, 1.f, 7000.f), 0.5f, 1.f));
+    float on = Rms(Window(RunDamage(Bit(bitch::kCodecWarble), 0.35f, 1.f, 7000.f), 0.5f, 1.f));
+    CHECK(Db(on / off) < -20.0, "codec warble pad: 7 kHz only %.1f dB down", Db(on / off));
+}
+
 int main() {
     TestSoftQuantize();
     TestSoftClip();
@@ -2742,6 +2797,7 @@ int main() {
     TestDropouts();
     TestStutter();
     TestCodecWarble();
+    TestEffectsDamage();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }
