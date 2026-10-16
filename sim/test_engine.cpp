@@ -27,6 +27,7 @@
 #include "morse_chimes.h"
 #include "selcall.h"
 #include "jammer.h"
+#include "stutter.h"
 #include "dropouts.h"
 #include "crush.h"
 #include <algorithm>
@@ -2560,6 +2561,44 @@ static void TestDropouts() {
     CHECK(gaps >= 2 && gaps <= 12, "dropouts at 0.35: %d gaps in 20 s (want ~6)", gaps);
 }
 
+static void TestStutter() {
+    static bitch::Stutter s; // ~46 KB: off the stack
+    s.Init(kSampleRate, 17u);
+    // A slow rising ramp in, and its negative on the right: repeats play the past (lower values)
+    int starts = 0, repeating = 0, from_past = 0;
+    bool was = false, symmetric = true;
+    for (int b = 0; b < (int)(4.f * kSampleRate / 48); b++) {
+        s.Update(1.f, 48.f / kSampleRate);
+        for (int k = 0; k < 48; k++) {
+            int n = b * 48 + k;
+            float live = 0.5f * (float)(n % 96000) / 96000.f;
+            float l = live, r = -live;
+            s.Process(l, r);
+            symmetric = symmetric && r == -l;
+            if (s.Repeating()) {
+                repeating++;
+                from_past += l < live - 0.001f;
+            }
+        }
+        starts += s.Repeating() && !was;
+        was = s.Repeating();
+    }
+    CHECK(starts >= 3, "stutter at 1: %d stutters in 4 s", starts);
+    CHECK(repeating > 0 && from_past > repeating / 2, "stutter: %d of %d repeating samples from the past", from_past,
+          repeating);
+    CHECK(symmetric, "stutter: the sides don't repeat together");
+    // Nothing until the buffer holds a fragment: right after Reset, the first 30 ms are live
+    s.Reset();
+    bool live_at_start = true;
+    for (int n = 0; n < (int)(0.03f * kSampleRate); n++) {
+        if (n % 48 == 0) s.Update(1.f, 48.f / kSampleRate);
+        float l = (float)n, r = 0.f;
+        s.Process(l, r);
+        live_at_start = live_at_start && l == (float)n;
+    }
+    CHECK(live_at_start, "stutter: repeated before it had a whole fragment");
+}
+
 int main() {
     TestSoftQuantize();
     TestSoftClip();
@@ -2656,5 +2695,6 @@ int main() {
     if (failures == 0) printf("All tests passed\n");
     TestCrush();
     TestDropouts();
+    TestStutter();
     return failures == 0 ? 0 : 1;
 }
