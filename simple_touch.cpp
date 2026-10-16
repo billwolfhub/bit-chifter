@@ -5,7 +5,9 @@
 // effects (Shift & time / Radio / Digital & damage): a pad's effect is on while it's held, and
 // RECEPTION also sets how strong they are. Built so far: feedback burst, dial spins, static burst,
 // squelch, signal fade-out, filter slam, ring 100%, carrier x2, kill dry, hold drift; and the radio
-// pads: scrambler, hopping scrambler, passing carriers, selcall, Morse chimes, jammer.
+// pads: scrambler, hopping scrambler, passing carriers, selcall, Morse chimes, jammer; and the damage
+// pads: bitcrush, sample-rate crush, dropouts, stutter, codec warble, and chaos (2-3 random effects
+// while held). Still to come: page 1's echoes, spirals, chirp and warble, and switch 2 (Freeze / Loop).
 // The "TOU" logo pad: a tap steps the stereo mode (Linked / Mirror / Rotate, with 1/2/3 confirmation
 // blips). The CPU load and the
 // controls are printed over USB serial once a second.
