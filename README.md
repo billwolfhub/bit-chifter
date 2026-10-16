@@ -64,7 +64,7 @@ pulses), and read the output with `cat /dev/cu.usbmodem*`.
 | "TOU" logo pad | Tap: stereo mode (1 blip Linked, 2 Mirror, 3 Rotate (8 s)) |
 
 Stereo in, stereo out; a mono source in one input feeds both sides at full level (a side
-counts as unused after 3 s of silence). CPU about 22% (part 3).
+counts as unused after 3 s of silence). CPU (measured 2026-10-16, Seed 1.2): about 31% average while playing, 58% at most with many pads held at once.
 
 Build and flash: `make`, then RESET, BOOT while the LED pulses, `make program-dfu`.
 Over USB serial (`cat /dev/cu.usbmodem*`), once a second: CPU load, the
