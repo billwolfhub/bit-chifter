@@ -27,6 +27,7 @@
 #include "morse_chimes.h"
 #include "selcall.h"
 #include "jammer.h"
+#include "crush.h"
 #include <algorithm>
 #include <cstdint>
 
@@ -2483,6 +2484,46 @@ static void TestEffectCarriersFollowDial() {
           "carriers don't follow the dial (station %.0f Hz)", s0);
 }
 
+static void TestCrush() {
+    CHECK(bitch::CrushBits(0.35f) == 10.f && bitch::CrushBits(1.f) == 3.f, "crush bits %.1f %.1f",
+          bitch::CrushBits(0.35f), bitch::CrushBits(1.f));
+    // 3 bits: only multiples of 0.25
+    float step = bitch::CrushStep(3.f);
+    bool on_grid = true;
+    for (int n = 0; n < 4800; n++) {
+        float y = bitch::Bitcrush(Sine(440.f, 0.8f, n), step);
+        float k = y / 0.25f;
+        on_grid = on_grid && fabsf(k - roundf(k)) < 1e-6f;
+    }
+    CHECK(fabsf(step - 0.25f) < 1e-7f && on_grid, "bitcrush 3 bits: step %g, on the grid %d", step, (int)on_grid);
+    // 10 bits: within half a step
+    step = bitch::CrushStep(10.f);
+    float worst = 0.f;
+    for (int n = 0; n < 4800; n++) {
+        float x = Sine(440.f, 0.8f, n);
+        worst = std::max(worst, fabsf(bitch::Bitcrush(x, step) - x));
+    }
+    CHECK(worst <= 0.5f * step + 1e-7f, "bitcrush 10 bits: error %g (step %g)", worst, step);
+    // Sample-and-hold: 1.5 kHz at amount 1 (about 150 new values in 0.1 s), 12 kHz at 0.35
+    bitch::RateCrush rc;
+    rc.Init(kSampleRate);
+    for (float amount : {1.f, 0.35f}) {
+        rc.Reset();
+        rc.Update(amount);
+        int changes = 0;
+        float prev = rc.Process(Sine(440.f, 0.8f, 0));
+        for (int n = 1; n < 4800; n++) {
+            float y = rc.Process(Sine(440.f, 0.8f, n));
+            changes += y != prev;
+            prev = y;
+        }
+        float want = 0.1f * rc.HoldRateHz();
+        CHECK(fabsf((float)changes - want) <= 2.f + 0.01f * want, "rate crush %.2f: %d new values (want %.0f)",
+              amount, changes, want);
+    }
+    CHECK(fabsf(rc.HoldRateHz() - 12000.f) < 1.f, "rate crush at 0.35: %.0f Hz", rc.HoldRateHz());
+}
+
 int main() {
     TestSoftQuantize();
     TestSoftClip();
@@ -2577,5 +2618,6 @@ int main() {
     TestRadioZeroBeat();
     TestEffectsRadioNoClick();
     if (failures == 0) printf("All tests passed\n");
+    TestCrush();
     return failures == 0 ? 0 : 1;
 }
