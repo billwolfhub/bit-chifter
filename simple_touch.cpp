@@ -7,7 +7,8 @@
 // squelch, signal fade-out, filter slam, ring 100%, carrier x2, kill dry, hold drift; and the radio
 // pads: scrambler, hopping scrambler, passing carriers, selcall, Morse chimes, jammer; and the damage
 // pads: bitcrush, sample-rate crush, dropouts, stutter, codec warble, and chaos (2-3 random effects
-// while held). Still to come: page 1's echoes, spirals, chirp and warble, and switch 2 (Freeze / Loop).
+// while held); page 1: echoes (shifted, reverse, ping-pong), spiral up/down, chirp, warble. Switch 2
+// (right switch): Normal / Freeze / Loop.
 // The "TOU" logo pad: a tap steps the stereo mode (Linked / Mirror / Rotate, with 1/2/3 confirmation
 // blips). The CPU load and the
 // controls are printed over USB serial once a second.
@@ -42,6 +43,7 @@ bitch::Engine engine;
 // PlateReverb/DelayLine must stay constant-initialisable (no user constructors): global
 // constructors run before hw.Init() sets up the SDRAM.
 DSY_SDRAM_BSS bitch::PlateReverb plate;
+DSY_SDRAM_BSS bitch::TapeMemory tape; // the echoes' and the capture's buffers (~1.1 MB; same rules as the plate)
 CpuLoadMeter cpu;
 Mpr121I2C pads;
 bitch::Blips blips;
@@ -49,6 +51,8 @@ Switch3 page_switch;           // switch 1 (left): the page; reads mirror-image 
 bitch::PadPages pad_pages;     // pads -> effects (on while held), TOU tap -> stereo mode
 volatile uint32_t effects = 0; // from the pads (main loop) to the engine (audio callback)
 volatile int page = 0;         // for the report
+Switch3 capture_switch;        // switch 2 (right): Normal / Freeze / Loop; reads mirror-image
+volatile int capture = 0;      // 0 Normal, 1 Freeze, 2 Loop
 volatile int blip_samples = 0; // diagnostic: non-zero blip samples since the last report
 volatile int stereo_mode = 0; // 0 Linked, 1 Mirror, 2 Rotate (cycled by the TOU pad)
 volatile float in_peak[2], out_peak[2]; // diagnostic: block peaks since the last report
@@ -70,6 +74,7 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
     p.stereo_mode = (bitch::StereoMode)stereo_mode;
     p.effects = effects;
     p.effect_amount = bitch::EffectAmount(p.reception);
+    p.capture = (bitch::CaptureMode)capture;
     p.detent = 0.7f;          // harmonic detents, medium
     p.dial_inertia_s = 0.06f; // TUNE glides like a heavy dial (two 60 ms stages)
     engine.Process(in[0], in[1], out[0], out[1], size, p);
@@ -122,14 +127,16 @@ int main(void) {
     // subnormal limit cycle after silence
     __set_FPSCR(__get_FPSCR() | (1u << 24));
     FPU->FPDSCR |= FPU_FPDSCR_FZ_Msk; // the audio interrupt's FP context starts from FPDSCR, not FPSCR
-    engine.Init(hw.AudioSampleRate(), hw.AudioBlockSize(), &plate); // after hw.Init (which sets up the SDRAM)
+    engine.Init(hw.AudioSampleRate(), hw.AudioBlockSize(), &plate, &tape); // after hw.Init (which sets up the SDRAM)
     cpu.Init(hw.AudioSampleRate(), hw.AudioBlockSize());
     Mpr121I2C::Config pad_config;
     bool pads_ok = pads.Init(pad_config) == Mpr121I2C::OK;
     blips.Init(hw.AudioSampleRate());
     page_switch.Init(seed::D9, seed::D8);
+    capture_switch.Init(seed::D7, seed::D6);
     hw.StartAudio(AudioCallback);
 
+    static const char *capture_names[3] = {"normal", "freeze", "loop"};
     static const char *mode_names[3] = {"linked", "mirror", "rotate"};
     uint32_t last_report = System::GetNow();
     while (1) {
@@ -139,6 +146,9 @@ int main(void) {
         // Switch 1 physically left reads POS_RIGHT: left = page 1, centre = page 2, right = page 3.
         int position = page_switch.Read();
         page = position == Switch3::POS_RIGHT ? 0 : (position == Switch3::POS_CENTER ? 1 : 2);
+        // Switch 2, also mirror-image: physically left = Normal, centre = Freeze, right = Loop
+        int capture_position = capture_switch.Read();
+        capture = capture_position == Switch3::POS_RIGHT ? 0 : (capture_position == Switch3::POS_CENTER ? 1 : 2);
         pad_pages.Update(System::GetNow(), pads_ok ? pads.Touched() : 0u, page);
         effects = pad_pages.Effects();
         int steps = pad_pages.TakeStereoSteps();
@@ -160,7 +170,7 @@ int main(void) {
         // One message per second, two lines
         Report("CPU %d%% max %d%% | tune %d Hz fb %d%% mix %d%% rev %d%% rec %d%% | ring %d%% car %d Hz | "
                      "filt %d Hz q %d.%d open %d%%\r\n"
-               "  %s%s | in L %d R %d dB | out L %d R %d dB | blip samples %d | pitch %s | page %d fx %08lx",
+               "  %s%s | in L %d R %d dB | out L %d R %d dB | blip samples %d | pitch %s | page %d fx %08lx capture %s",
                      (int)(cpu.GetAvgCpuLoad() * 100.f), (int)(cpu.GetMaxCpuLoad() * 100.f),
                      (int)bitch::TuneHz(Read(kInputTune)), (int)(Read(kInputFeedback) * 100.f),
                      (int)(mix * 100.f), (int)(reverb * 100.f),
@@ -168,7 +178,7 @@ int main(void) {
                      (int)bitch::CarrierHz(Read(kInputCarrier)), (int)bitch::FilterHz(Read(kInputFilter)),
                      (int)q, (int)(q * 10.f) % 10, (int)(open * 100.f), mode_names[stereo_mode],
                pads_ok ? "" : " (pads not found)", db(in_peak[0]), db(in_peak[1]), db(out_peak[0]),
-               db(out_peak[1]), blip_samples, pitch, page + 1, (unsigned long)effects);
+               db(out_peak[1]), blip_samples, pitch, page + 1, (unsigned long)effects, capture_names[capture]);
         blip_samples = 0;
         in_peak[0] = in_peak[1] = out_peak[0] = out_peak[1] = 0.f;
         cpu.Reset();
