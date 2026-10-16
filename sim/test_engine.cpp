@@ -31,6 +31,7 @@
 #include "stutter.h"
 #include "dropouts.h"
 #include "crush.h"
+#include "echo_loop.h"
 #include <algorithm>
 #include <cstdint>
 
@@ -2838,6 +2839,98 @@ static void TestEffectsDamageAtAnyMix() {
           100.f * (float)quiet / (float)x.size());
 }
 
+static float echo_buffer[bitch::EchoLoop::kMax];
+
+// An impulse through an echo loop (no feedback): where does it come back?
+static int EchoArrival(bitch::EchoLoop &e, float time_s, bool reverse, std::vector<float> *out = nullptr) {
+    int arrival = -1;
+    float best = 0.f;
+    for (int b = 0; b < (int)(2.f * kSampleRate / 48); b++) {
+        e.Update(time_s, reverse, 48);
+        for (int k = 0; k < 48; k++) {
+            int n = b * 48 + k;
+            float y = e.Read();
+            e.Write(n == 0 ? 0.5f : 0.f);
+            if (out) out->push_back(y);
+            if (fabsf(y) > best) {
+                best = fabsf(y);
+                arrival = n;
+            }
+        }
+    }
+    return arrival;
+}
+
+static void TestEchoLoop() {
+    bitch::EchoLoop e;
+    e.Init(kSampleRate, echo_buffer);
+    while (!e.ClearStep(1024)) {
+    }
+    // Forward: the impulse returns after the echo time (time set before the first Update: no glide)
+    e.SetTimeNow(0.3f);
+    int at = EchoArrival(e, 0.3f, false);
+    CHECK(abs(at - (int)(0.3f * kSampleRate)) <= 2, "echo: back after %d samples (want %d)", at,
+          (int)(0.3f * kSampleRate));
+    // Time changes glide (~0.5 s): 0.2 s after a change from 0.3 to 0.6 s the time is in between
+    for (int b = 0; b < (int)(0.2f * kSampleRate / 48); b++) { // the glide runs per sample, in Read()
+        e.Update(0.6f, false, 48);
+        for (int k = 0; k < 48; k++) {
+            e.Read();
+            e.Write(0.f);
+        }
+    }
+    CHECK(e.TimeSeconds() > 0.35f && e.TimeSeconds() < 0.55f, "echo glide: %.3f s after 0.2 s", e.TimeSeconds());
+    // Reverse: a repeat played backwards: a rising ramp written comes back falling
+    bitch::EchoLoop rev;
+    rev.Init(kSampleRate, echo_buffer);
+    while (!rev.ClearStep(1024)) {
+    }
+    rev.SetTimeNow(0.4f);
+    std::vector<float> out;
+    int falling = 0, rising = 0;
+    for (int b = 0; b < (int)(2.f * kSampleRate / 48); b++) {
+        rev.Update(0.4f, true, 48);
+        for (int k = 0; k < 48; k++) {
+            int n = b * 48 + k;
+            out.push_back(rev.Read());
+            rev.Write(0.25f * (float)(n % 4800) / 4800.f); // rising 100 ms ramps
+        }
+    }
+    for (size_t k = (size_t)(0.5f * kSampleRate); k + 1 < out.size(); k++) {
+        float d = out[k + 1] - out[k];
+        falling += d < -1e-6f && d > -0.001f;
+        rising += d > 1e-6f && d < 0.001f;
+    }
+    CHECK(falling > 2 * rising, "reverse echo: %d falling steps vs %d rising (want mostly falling)", falling, rising);
+    // The low-pass in the loop: 10 kHz is cut well below 1 kHz
+    auto tone_through = [](float hz) {
+        bitch::EchoLoop t;
+        t.Init(kSampleRate, echo_buffer);
+        while (!t.ClearStep(1024)) {
+        }
+        t.SetTimeNow(0.01f);
+        std::vector<float> y;
+        for (int n = 0; n < 24000; n++) {
+            if (n % 48 == 0) t.Update(0.01f, false, 48);
+            y.push_back(t.Read());
+            t.Write(Sine(hz, 0.25f, n));
+        }
+        return Rms(Window(y, 0.2f, 0.5f));
+    };
+    CHECK(Db(tone_through(10000.f) / tone_through(1000.f)) < -3.0, "echo low-pass: 10 kHz only %.1f dB below 1 kHz",
+          Db(tone_through(10000.f) / tone_through(1000.f)));
+    // ClearStep: bounded, and the line reads exactly 0 afterwards
+    for (int n = 0; n < 4800; n++) e.Write(0.5f);
+    int steps = 0;
+    while (!e.ClearStep(1024)) steps++;
+    float left = 0.f;
+    for (int n = 0; n < 48000; n++) {
+        left = std::max(left, fabsf(e.Read()));
+        e.Write(0.f);
+    }
+    CHECK(steps <= bitch::EchoLoop::kMax / 1024 + 1 && left == 0.f, "echo clear: %d steps, %g left", steps, left);
+}
+
 int main() {
     TestSoftQuantize();
     TestSoftClip();
@@ -2938,6 +3031,7 @@ int main() {
     TestEffectsDamage();
     TestEffectsDamageNoClick();
     TestEffectsDamageAtAnyMix();
+    TestEchoLoop();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }
