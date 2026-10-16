@@ -74,7 +74,7 @@ static void TestCaptureLoop() {
     int n = 0;
     // Too little recorded: Freeze stays live
     RunCapture(c, CaptureMode::kNormal, 0.01f, noise, n, out, live);
-    RunCapture(c, CaptureMode::kFreeze, 0.1f, noise, n, out, live);
+    RunCapture(c, CaptureMode::kFreeze, 0.03f, noise, n, out, live);
     CHECK(out == live, "capture: froze before it had 50 ms");
     // Normal: exactly the live input
     out.clear();

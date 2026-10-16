@@ -31,6 +31,7 @@
 #include "stutter.h"
 #include "dropouts.h"
 #include "crush.h"
+#include "capture_loop.h"
 #include "echo_loop.h"
 #include <algorithm>
 #include <cstdint>
@@ -2931,6 +2932,78 @@ static void TestEchoLoop() {
     CHECK(steps <= bitch::EchoLoop::kMax / 1024 + 1 && left == 0.f, "echo clear: %d steps, %g left", steps, left);
 }
 
+static float capture_l[bitch::CaptureLoop::kMax], capture_r[bitch::CaptureLoop::kMax]; // 2 s each
+
+// Runs a capture loop for `seconds` in `mode` on a signal (left = signal, right = -signal)
+template <class Signal>
+static void RunCapture(bitch::CaptureLoop &c, bitch::CaptureMode mode, float seconds, Signal signal, int &n,
+                       std::vector<float> &out, std::vector<float> &live) {
+    for (int b = 0; b < (int)(seconds * kSampleRate / 48); b++) {
+        c.Set(mode);
+        for (int k = 0; k < 48; k++, n++) {
+            float l = signal(n), r = -l;
+            live.push_back(l);
+            c.Process(l, r);
+            out.push_back(l);
+            CHECK(r == -l, "capture: the sides differ at %d", n);
+        }
+    }
+}
+
+static void TestCaptureLoop() {
+    using bitch::CaptureMode;
+    bitch::CaptureLoop c;
+    c.Init(kSampleRate, capture_l, capture_r);
+    uint32_t seed = 7;
+    auto noise = [&seed](int) {
+        seed = seed * 1664525u + 1013904223u;
+        return ((seed >> 8) / 8388608.f - 1.f) * 0.25f;
+    };
+    auto silence = [](int) { return 0.f; };
+    std::vector<float> out, live;
+    int n = 0;
+    // Too little recorded: Freeze stays live
+    RunCapture(c, CaptureMode::kNormal, 0.01f, noise, n, out, live);
+    RunCapture(c, CaptureMode::kFreeze, 0.03f, noise, n, out, live);
+    CHECK(out == live, "capture: froze before it had 50 ms");
+    // Normal: exactly the live input
+    out.clear();
+    live.clear();
+    RunCapture(c, CaptureMode::kNormal, 2.5f, noise, n, out, live);
+    CHECK(out == live, "capture: Normal changed the input");
+    // Loop: the last 2 s repeat, exactly, every LoopSamples() (after the 30 ms fade in)
+    out.clear();
+    live.clear();
+    RunCapture(c, CaptureMode::kLoop, 6.f, silence, n, out, live);
+    int period = c.LoopSamples();
+    CHECK(period > (int)(1.9f * kSampleRate) && period < (int)(2.f * kSampleRate), "loop period %d", period);
+    int mismatches = 0;
+    for (int k = (int)(0.1f * kSampleRate); k + period < (int)out.size(); k++) mismatches += out[k] != out[k + period];
+    CHECK(mismatches == 0, "loop: %d samples don't repeat", mismatches);
+    CHECK(Rms(Window(out, 0.1f, 6.f)) > 0.1f, "loop: silent (%g)", Rms(Window(out, 0.1f, 6.f)));
+    float step = 0.f;
+    for (size_t k = 1; k < out.size(); k++) step = std::max(step, fabsf(out[k] - out[k - 1]));
+    CHECK(step < 0.55f, "loop: a step of %.3f (noise steps up to 0.5)", step);
+    // Back to Normal: live again after the 30 ms fade
+    out.clear();
+    live.clear();
+    RunCapture(c, CaptureMode::kNormal, 0.2f, silence, n, out, live);
+    CHECK(Peak(Window(out, 0.05f, 0.2f)) == 0.f, "capture: still playing after Normal");
+    // Freeze: a steady drone from the last 250 ms of a tone, with no clicks
+    out.clear();
+    live.clear();
+    RunCapture(c, CaptureMode::kNormal, 1.f, [](int k) { return Sine(440.f, 0.25f, k); }, n, out, live);
+    out.clear();
+    live.clear();
+    RunCapture(c, CaptureMode::kFreeze, 3.f, silence, n, out, live);
+    float early = Rms(Window(out, 0.1f, 0.5f)), late = Rms(Window(out, 2.5f, 3.f));
+    CHECK(late > 0.1f && fabsf(Db(late / early)) < 3.f, "freeze: level %.3f then %.3f", early, late);
+    CHECK(Magnitude(Window(out, 1.f, 3.f), 440.f) > 0.1, "freeze: not the tone");
+    step = 0.f;
+    for (size_t k = 1; k < out.size(); k++) step = std::max(step, fabsf(out[k] - out[k - 1]));
+    CHECK(step < 0.03f, "freeze: a step of %.4f (the tone's own is 0.0144)", step);
+}
+
 int main() {
     TestSoftQuantize();
     TestSoftClip();
@@ -3032,6 +3105,7 @@ int main() {
     TestEffectsDamageNoClick();
     TestEffectsDamageAtAnyMix();
     TestEchoLoop();
+    TestCaptureLoop();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }
