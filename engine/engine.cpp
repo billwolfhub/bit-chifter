@@ -401,30 +401,6 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
             if (squelch_noise > 0.f) received += squelch_noise * squelch_noise_.Bipolar();
             filtered[c] = filter_[c].Process(received);
         }
-        // Digital damage (page 3), after the radio filter and before the AGC (so the AGC pumps on it)
-        float d[5];
-        for (int k = 0; k < 5; k++) d[k] = damaging[k] ? damage_from[k] + t * (damage_to[k] - damage_from[k]) : 0.f;
-        if (damaging[0]) {
-            float side_l = filtered[0], side_r = filtered[1];
-            codec_.Process(side_l, side_r);
-            filtered[0] += d[0] * (side_l - filtered[0]);
-            filtered[1] += d[0] * (side_r - filtered[1]);
-        }
-        for (int c = 0; c < 2; c++) {
-            if (damaging[1]) filtered[c] += d[1] * (rate_crush_[c].Process(filtered[c]) - filtered[c]);
-            if (damaging[2]) filtered[c] += d[2] * (Bitcrush(filtered[c], crush_step, crush_inv_step) - filtered[c]);
-        }
-        if (damaging[3]) {
-            float side_l = filtered[0], side_r = filtered[1];
-            stutter_.Process(side_l, side_r);
-            filtered[0] += d[3] * (side_l - filtered[0]);
-            filtered[1] += d[3] * (side_r - filtered[1]);
-        }
-        if (damaging[4]) {
-            float drop = 1.f - d[4] * (1.f - dropouts_.Gain());
-            filtered[0] *= drop;
-            filtered[1] *= drop;
-        }
         for (int c = 0; c < 2; c++) {
             float wet = wet_gain * agc_[c].Process(filtered[c]);
             y[c] = dry[c] + mix_ * (wet - dry[c]);
@@ -437,8 +413,34 @@ void Engine::Process(const float *in_l, const float *in_r, float *out_l, float *
             left += 0.5f * reverb_ * tail_l; // up to -6 dB
             right += 0.5f * reverb_ * tail_r;
         }
-        out_l[i] = SoftClip(left);
-        out_r[i] = SoftClip(right);
+        // Digital damage (page 3), on the whole sound: after the dry/wet mix and the reverb, so it
+        // bites at any MIX (like a broken stream, it breaks everything you hear)
+        float out[2] = {left, right};
+        float d[5];
+        for (int k = 0; k < 5; k++) d[k] = damaging[k] ? damage_from[k] + t * (damage_to[k] - damage_from[k]) : 0.f;
+        if (damaging[0]) {
+            float side_l = out[0], side_r = out[1];
+            codec_.Process(side_l, side_r);
+            out[0] += d[0] * (side_l - out[0]);
+            out[1] += d[0] * (side_r - out[1]);
+        }
+        for (int c = 0; c < 2; c++) {
+            if (damaging[1]) out[c] += d[1] * (rate_crush_[c].Process(out[c]) - out[c]);
+            if (damaging[2]) out[c] += d[2] * (Bitcrush(out[c], crush_step, crush_inv_step) - out[c]);
+        }
+        if (damaging[3]) {
+            float side_l = out[0], side_r = out[1];
+            stutter_.Process(side_l, side_r);
+            out[0] += d[3] * (side_l - out[0]);
+            out[1] += d[3] * (side_r - out[1]);
+        }
+        if (damaging[4]) {
+            float drop = 1.f - d[4] * (1.f - dropouts_.Gain());
+            out[0] *= drop;
+            out[1] *= drop;
+        }
+        out_l[i] = SoftClip(out[0]);
+        out_r[i] = SoftClip(out[1]);
     }
     pitch_.Work();
     // Hold: a side counts as active at once when its envelope passes kSilent, and as unused

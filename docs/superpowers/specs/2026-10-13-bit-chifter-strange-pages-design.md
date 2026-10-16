@@ -123,7 +123,9 @@ when off, and fades in and out over 10–30 ms so switching never clicks.
 
 ### Page 3: Digital & damage
 
-These sit after the radio filter, before the AGC (so the AGC pumps on the damage).
+These work on the whole sound: after the dry/wet mix and the reverb, just before the final soft
+clip, so they bite at any MIX setting (changed 2026-10-16 after playing it: placed in the wet
+path, before the AGC, they were masked whenever MIX was partly dry).
 
 - **Bitcrush:** 10 bits (a = 0.35) down to 3 bits (a = 1), no dither.
 - **Sample-rate crush:** sample-and-hold at 12 kHz (a = 0.35) down to 1.5 kHz (a = 1),
@@ -176,8 +178,8 @@ At the input, before Drive, so the whole chain (dry included) processes the capt
      **a second shifter per side for the spiral**
   4. Fading + static + **passing carriers + Morse chimes + jammer** (Selcall goes in before the
      shifter, at 2)
-  5. Radio filter → **Digital damage** → AGC
-  6. Dry/wet mix, swap, soft clip, NaN guard (as now)
+  5. Radio filter → AGC
+  6. Dry/wet mix, swap, reverb → **Digital damage** → soft clip, NaN guard
 - **Memory:** the echo buffers (~1 s per side) and the capture buffer (2 s stereo) live in
   the Seed's 64 MB SDRAM (`DSY_SDRAM_BSS`), zeroed at start-up (uninitialised SDRAM holds
   NaNs).

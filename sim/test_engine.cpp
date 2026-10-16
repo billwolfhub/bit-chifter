@@ -2808,6 +2808,36 @@ static void TestEffectsDamage() {
     CHECK(Db(on / off) < -20.0, "codec warble pad: 7 kHz only %.1f dB down", Db(on / off));
 }
 
+// The damage pads work on the whole sound, at any MIX (they come after the dry/wet mix)
+static void TestEffectsDamageAtAnyMix() {
+    auto run = [](uint32_t effects, float seconds) {
+        bitch::Engine e;
+        e.Init(kSampleRate);
+        bitch::Params p;
+        p.mix = 0.f; // fully dry
+        p.effects = effects;
+        p.effect_amount = 1.f;
+        std::vector<float> l, r;
+        int n = 0;
+        RunFor(e, p, seconds, [](int k) { return Sine(1000.f, 0.25f, k); }, n, l, r);
+        return l;
+    };
+    auto w = Window(run(bitch::Bit(bitch::kBitcrush), 1.f), 0.5f, 1.f);
+    const float kGrid[3] = {bitch::SoftClip(-0.25f), 0.f, bitch::SoftClip(0.25f)};
+    int off_grid = 0;
+    for (float v : w) {
+        float nearest = 1e9f;
+        for (float g : kGrid) nearest = std::min(nearest, fabsf(v - g));
+        off_grid += nearest > 1e-5f;
+    }
+    CHECK(off_grid == 0, "bitcrush pad at MIX 0: %d samples off the 3-bit grid", off_grid);
+    auto x = run(bitch::Bit(bitch::kDropouts), 5.f);
+    int quiet = 0;
+    for (float v : x) quiet += fabsf(v) < 1e-4f;
+    CHECK(quiet > (int)(0.15f * x.size()), "dropouts pad at MIX 0: silent only %.0f%% of the time",
+          100.f * (float)quiet / (float)x.size());
+}
+
 int main() {
     TestSoftQuantize();
     TestSoftClip();
@@ -2907,6 +2937,7 @@ int main() {
     TestCodecWarble();
     TestEffectsDamage();
     TestEffectsDamageNoClick();
+    TestEffectsDamageAtAnyMix();
     if (failures == 0) printf("All tests passed\n");
     return failures == 0 ? 0 : 1;
 }
